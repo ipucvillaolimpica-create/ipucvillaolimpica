@@ -1,0 +1,1874 @@
+<script>
+(function () {
+  'use strict';
+
+  // ───────────────────────── Estado y utilidades ─────────────────────────
+  const S = { ini: null, vista: 'dashboard', token: '' };
+  const guardado = {
+    get: (k) => { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+    set: (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) { /* sin almacenamiento */ } },
+  };
+  const $ = (s, el = document) => el.querySelector(s);
+  const $$ = (s, el = document) => Array.from(el.querySelectorAll(s));
+  S.verProm = guardado.get('ipuc_prom') === '1';
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const pesos = (v) => (Number(v) < 0 ? '-$ ' : '$ ') + Math.abs(Math.round(Number(v) || 0)).toLocaleString('es-CO');
+  const soloDigitos = (s) => Number(String(s || '').replace(/\D/g, '')) || 0;
+  const MESES = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+  const MESES_L = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  const fechaCorta = (f) => { const p = String(f).split('-'); return p.length < 3 ? f : `${Number(p[2])} ${MESES[Number(p[1]) - 1]} ${p[0]}`; };
+  const PALETA = ['#00338D', '#009FDA', '#F0AB00', '#4F74C4', '#7FD0EE', '#F6CC5F', '#8C9BBF', '#1C5AA8'];
+
+  function api(accion, datos) {
+    return new Promise((ok, mal) => {
+      google.script.run
+        .withSuccessHandler((r) => {
+          if (r && r.ok) return ok(r.data);
+          if (r && r.error === 'SESION_VENCIDA') {
+            if (window.MODO === 'agenda') { guardado.set('ipuc_ag', ''); iniciarAgenda('Su sesión terminó. Ingrese de nuevo.'); }
+            else { guardado.set('ipuc_t', ''); mostrarLogin('Su sesión terminó. Ingrese de nuevo.'); }
+            const e = new Error('Su sesión terminó.'); e.silencioso = true; return mal(e);
+          }
+          mal(new Error(r ? r.error : 'Sin respuesta del servidor'));
+        })
+        .withFailureHandler((e) => mal(e instanceof Error ? e : new Error(String(e))))
+        .api(accion, datos || {}, S.token);
+    });
+  }
+
+  const CUENTA = (c) => (S.ini && S.ini.cuentas[c]) || c;
+  const puede = (p) => S.ini && S.ini.usuario.permisos.indexOf(p) !== -1;
+
+  function toast(msg, err) {
+    const t = document.createElement('div');
+    t.className = 'toast' + (err ? ' err' : '');
+    t.textContent = msg;
+    $('#toasts').appendChild(t);
+    setTimeout(() => t.remove(), err ? 7000 : 4000);
+  }
+
+  async function ocupado(btn, fn) {
+    const txt = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = 'Procesando…'; }
+    try { return await fn(); }
+    catch (e) { if (!e.silencioso) toast(e.message, true); throw e; }
+    finally { if (btn) { btn.disabled = false; btn.innerHTML = txt; } }
+  }
+
+  // ───────────────────────── Íconos (trazos SVG) ─────────────────────────
+  const P = {
+    home: '<path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/>',
+    in: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><rect x="3" y="17" width="18" height="4" rx="1.5"/>',
+    out: '<path d="M12 15V3"/><path d="M7 8l5-5 5 5"/><rect x="3" y="17" width="18" height="4" rx="1.5"/>',
+    cash: '<rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 12h.01M18 12h.01"/>',
+    users: '<circle cx="9" cy="8" r="4"/><path d="M2 21c0-4 3-6 7-6s7 2 7 6"/><path d="M17 4a4 4 0 010 8M22 21c0-3-2-5-4-5.5"/>',
+    report: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M8 17v-3M12 17v-6M16 17v-2"/>',
+    shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
+    cog: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/>',
+    log: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+    pdf: '<path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9z"/><path d="M14 3v6h6"/><path d="M9 15h6"/>',
+    menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
+    wallet: '<path d="M20 7H5a2 2 0 010-4h13v4"/><path d="M3 5v14a2 2 0 002 2h15V7"/><circle cx="16" cy="14" r="1.5"/>',
+    heart: '<path d="M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 10-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 000-7.8z"/>',
+    alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"/>',
+    swap: '<path d="M7 16V4M3 8l4-4 4 4"/><path d="M17 8v12M21 16l-4 4-4-4"/>',
+    phone: '<rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>',
+    target: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>',
+    calendar: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8 14h3v3H8z"/>',
+    check: '<path d="M5 12l5 5 9-10"/>',
+    flag: '<path d="M5 21V4"/><path d="M5 4h12l-2.5 4L17 12H5"/>',
+    cake: '<path d="M4 21h16v-8a2 2 0 00-2-2H6a2 2 0 00-2 2z"/><path d="M4 16c2 1.5 4 1.5 6 0s4-1.5 6 0 3 1 4 0"/><path d="M12 11V7"/><path d="M12 4.5c.8 0 1.2-.7 1.2-1.3S12 1.5 12 1.5s-1.2 1.1-1.2 1.7.4 1.3 1.2 1.3z"/>',
+    lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/>',
+    xls: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/>',
+  };
+  const ico = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${P[n] || ''}</svg>`;
+
+  // ───────────────────────── Navegación ─────────────────────────
+  const VISTAS = [
+    { id: 'dashboard', t: 'Panel', i: 'home', p: 'dashboard.ver', s: 'General', render: vDashboard },
+    { id: 'eventos', t: 'Eventos', i: 'flag', p: 'eventos.ver', render: () => vEventos() },
+    { id: 'semana', t: 'Informe semanal', i: 'calendar', p: 'semana.ver', render: () => vSemana() },
+    { id: 'ingresos', t: 'Diezmos e ingresos', i: 'in', p: 'movimientos.ver', render: () => vMovimientos('INGRESO') },
+    { id: 'gastos', t: 'Gastos', i: 'out', p: 'movimientos.ver', render: () => vMovimientos('EGRESO') },
+    { id: 'caja', t: 'Caja diaria', i: 'cash', p: 'movimientos.ver', render: vCaja },
+    { id: 'nequi', t: 'Nequi', i: 'phone', p: 'movimientos.ver', render: vNequi },
+    { id: 'presupuesto', t: 'Presupuesto', i: 'target', p: 'reportes.ver', render: vPresupuesto },
+    { id: 'miembros', t: 'Miembros', i: 'users', p: 'miembros.ver', render: vMiembros },
+    { id: 'reportes', t: 'Reportes', i: 'report', p: 'reportes.ver', render: vReportes },
+    { id: 'usuarios', t: 'Usuarios y roles', i: 'shield', p: 'usuarios.admin', s: 'Administración', render: vUsuarios },
+    { id: 'config', t: 'Configuración', i: 'cog', p: 'config.admin', render: vConfig },
+    { id: 'auditoria', t: 'Auditoría', i: 'log', p: 'auditoria.ver', render: vAuditoria },
+  ];
+
+  function pintarNav() {
+    let html = '';
+    VISTAS.filter((v) => puede(v.p)).forEach((v) => {
+      if (v.s) html += `<div class="nav-section">${v.s}</div>`;
+      html += `<a href="#" data-vista="${v.id}" class="${S.vista === v.id ? 'active' : ''}">${ico(v.i)}<span>${v.t}</span></a>`;
+    });
+    $('#nav').innerHTML = html;
+  }
+
+  function ir(id) {
+    const v = VISTAS.find((x) => x.id === id && puede(x.p)) || VISTAS.find((x) => puede(x.p));
+    S.vista = v.id;
+    pintarNav();
+    $('#pageTitle').textContent = v.t;
+    $('#pageSubtitle').textContent = '';
+    $('#topbarActions').innerHTML = botonExcel();
+    $('#view').innerHTML = '<div class="card empty">Cargando…</div>';
+    $('#sidebar').classList.remove('open'); $('#scrim').classList.remove('open');
+    Promise.resolve(v.render()).catch((e) => { $('#view').innerHTML = `<div class="card empty">${esc(e.message)}</div>`; });
+  }
+
+  function acciones(html) { $('#topbarActions').innerHTML = botonExcel() + html; }
+
+  // ───────────────────────── Modal ─────────────────────────
+  function abrirModal(titulo, html) {
+    $('#modalTitle').textContent = titulo;
+    $('#modalBody').innerHTML = html;
+    $('#modal').hidden = false;
+    const f = $('#modalBody input:not([type=hidden]), #modalBody select');
+    if (f) setTimeout(() => f.focus(), 30);
+    return $('#modalBody');
+  }
+  const cerrarModal = (forzar) => {
+    if ($('#modal').classList.contains('fijo') && forzar !== true) return;
+    $('#modal').classList.remove('fijo'); $('#modal').hidden = true; $('#modalBody').innerHTML = '';
+  };
+
+  function campo(id, etiqueta, control, clase) {
+    return `<div class="field ${clase || ''}"><label for="${id}">${etiqueta}</label>${control}</div>`;
+  }
+  const opciones = (lista, sel) => lista.map((o) => {
+    const v = typeof o === 'object' ? o.v : o, t = typeof o === 'object' ? o.t : o;
+    return `<option value="${esc(v)}" ${String(v) === String(sel) ? 'selected' : ''}>${esc(t)}</option>`;
+  }).join('');
+  function inputDinero(el) {
+    el.addEventListener('input', () => {
+      const n = soloDigitos(el.value);
+      el.value = n ? n.toLocaleString('es-CO') : '';
+    });
+  }
+  const leerForm = (root) => {
+    const o = {};
+    $$('[name]', root).forEach((el) => { o[el.name] = el.type === 'checkbox' ? el.checked : el.value; });
+    return o;
+  };
+
+  // ───────────────────────── Panel ─────────────────────────
+  async function vDashboard() {
+    $('#pageSubtitle').textContent = 'Resumen de la congregación';
+    if (puede('movimientos.crear')) {
+      acciones(`<button class="btn ghost" data-act="nuevoEgreso">${ico('out')}<span>Registrar gasto</span></button>
+        <button class="btn gold" data-act="nuevoIngreso">${ico('plus')}<span>Registrar ingreso</span></button>`);
+    }
+    const d = await api('dashboard');
+    const k = d.kpis;
+    const fh = S.ini.hoy.split('-');
+    const nombre = (S.ini.usuario.nombre || '').split(' ')[0];
+    const aviso = d.diasSinCerrar.length && puede('caja.cerrar')
+      ? `<div class="alert">${ico('alert')}<div><b>Hay ${d.diasSinCerrar.length} día(s) con movimientos sin cierre de caja:</b> ${d.diasSinCerrar.slice(-5).map(fechaCorta).join(', ')}. <a href="#" data-vista="caja">Ir a caja diaria</a></div></div>`
+      : '';
+    const eventos = d.proximosEventos.length
+      ? `<div class="lista-evt">${d.proximosEventos.map((e) => {
+        const p = e.fecha.split('-');
+        return `<div class="evt"><div class="evt-fecha"><b>${Number(p[2])}</b><small>${MESES[Number(p[1]) - 1]}</small></div>
+          <div class="evt-txt"><b>${esc(e.titulo)}</b><span>${esc(e.hora_inicio)} a ${esc(e.hora_fin)}${e.lugar ? ' · ' + esc(e.lugar) : ''}</span></div></div>`;
+      }).join('')}</div>`
+      : '<div class="empty" style="padding:18px">No hay eventos próximos.</div>';
+    const hoyDia = Number(fh[2]);
+    const cumple = d.cumpleanos.length
+      ? `<div>${d.cumpleanos.map((c) => `<div class="cumple ${c.dia === hoyDia ? 'hoy' : ''}"><span>${esc(c.nombre)}</span><span class="muted">${c.dia} ${MESES[Number(fh[1]) - 1]}${c.dia === hoyDia ? ' · ¡hoy!' : ''}</span></div>`).join('')}</div>`
+      : '<div class="empty" style="padding:18px">Nadie cumple años este mes.</div>';
+    $('#view').innerHTML = `${aviso}
+      <div class="hero">
+        <div style="position:relative;z-index:1">
+          <h2>Bienvenido${nombre ? ', ' + esc(nombre) : ''}</h2>
+          <p>IPUC ${esc(S.ini.config.NOMBRE_CONGREGACION || '')} · ${Number(fh[2])} de ${MESES_L[Number(fh[1]) - 1]} de ${fh[0]}</p>
+          <span class="lema">${esc(S.ini.lema)}</span>
+        </div>
+        <div class="hero-saldo"><small>Saldo disponible</small><b>${pesos(d.saldoCaja + d.saldoNequi)}</b>
+          <span>Caja ${pesos(d.saldoCaja)} · Nequi ${pesos(d.saldoNequi)}</span></div>
+      </div>
+      <div class="grid g-4">
+        <div class="card kpi"><div class="ico t-cyan">${ico('in')}</div><div><small>Ingresos del mes</small><b>${pesos(k.ingresosMes)}</b><div class="foot">Hoy ${pesos(k.ingresosHoy)}</div></div></div>
+        <div class="card kpi k-azul"><div class="ico t-azul">${ico('heart')}</div><div><small>Diezmos del mes</small><b>${pesos(k.diezmosMes)}</b><div class="foot">Liquidado al pastor ${pesos(k.liquidadoMes || 0)}</div></div></div>
+        <div class="card kpi k-dorado"><div class="ico t-dorado">${ico('out')}</div><div><small>Gastos del mes</small><b>${pesos(k.egresosMes)}</b><div class="foot">Hoy ${pesos(k.egresosHoy)} · Caja ${d.cajaHoyCerrada ? 'cerrada' : 'abierta'}</div></div></div>
+        <div class="card kpi k-azul"><div class="ico t-azul">${ico('users')}</div><div><small>Miembros activos</small><b>${d.miembros.total}</b><div class="foot">${d.miembros.hermanos} hermanos · ${d.miembros.hermanas} hermanas</div></div></div>
+      </div>
+      <div class="grid g-21">
+        <div class="card"><div class="card-head"><h3>Ingresos y gastos · últimos 6 meses</h3>
+          <div class="legend"><span><i style="background:var(--cyan)"></i>Ingresos</span><span><i style="background:var(--dorado)"></i>Gastos</span></div></div>
+          ${graficoBarras(d.serie)}</div>
+        <div class="card"><div class="card-head"><h3>Gastos del mes por categoría</h3></div>${dona(d.egresosPorCategoria)}</div>
+      </div>
+      <div class="grid g-3">
+        <div class="card"><div class="card-head"><h3>Próximos eventos</h3>${puede('eventos.ver') ? '<a href="#" data-vista="eventos">Ver agenda</a>' : ''}</div>${eventos}</div>
+        <div class="card"><div class="card-head"><h3>Cumpleaños de ${MESES_L[Number(fh[1]) - 1]}</h3></div>${cumple}</div>
+        <div class="card"><div class="card-head"><h3>Presupuesto ${d.presupuesto.anio}</h3><a href="#" data-vista="presupuesto">Ver detalle</a></div>${resumenPpto(d.presupuesto)}</div>
+      </div>
+      <div class="grid g-21">
+        <div class="card"><div class="card-head"><h3>Últimos movimientos</h3>${puede('movimientos.ver') ? '<a href="#" data-vista="ingresos">Ver todos</a>' : ''}</div>
+          ${puede('movimientos.ver') ? tablaMovs(d.ultimos, true) : '<div class="empty">Su rol no incluye el detalle de movimientos.</div>'}</div>
+        <div class="card"><div class="card-head"><h3>Ingresos del mes por categoría</h3></div>${barrasH(d.ingresosPorCategoria)}</div>
+      </div>`;
+  }
+
+
+  function graficoBarras(serie) {
+    const W = 600, H = 240, pad = { l: 56, r: 10, t: 12, b: 28 };
+    const max = Math.max(1, ...serie.map((s) => Math.max(s.ingresos, s.egresos)));
+    const paso = Math.pow(10, Math.floor(Math.log10(max)));
+    const tope = Math.ceil(max / paso) * paso;
+    const ih = H - pad.t - pad.b, iw = W - pad.l - pad.r, gw = iw / serie.length, bw = Math.min(26, gw / 3.2);
+    const y = (v) => pad.t + ih - (v / tope) * ih;
+    const corto = (v) => v >= 1e6 ? (v / 1e6).toFixed(v % 1e6 ? 1 : 0) + ' M' : v >= 1e3 ? Math.round(v / 1e3) + ' mil' : String(v);
+    let g = '';
+    for (let i = 0; i <= 4; i++) {
+      const v = (tope / 4) * i;
+      g += `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(v)}" y2="${y(v)}" stroke="#E3E8F2"/><text x="${pad.l - 8}" y="${y(v) + 4}" text-anchor="end" font-size="11" fill="#64708A">${corto(v)}</text>`;
+    }
+    serie.forEach((s, i) => {
+      const cx = pad.l + gw * i + gw / 2;
+      const m = s.mes.split('-');
+      g += `<rect x="${cx - bw - 2}" y="${y(s.ingresos)}" width="${bw}" height="${pad.t + ih - y(s.ingresos)}" rx="5" fill="#009FDA"><title>Ingresos ${pesos(s.ingresos)}</title></rect>`;
+      g += `<rect x="${cx + 2}" y="${y(s.egresos)}" width="${bw}" height="${pad.t + ih - y(s.egresos)}" rx="5" fill="#F0AB00"><title>Gastos ${pesos(s.egresos)}</title></rect>`;
+      g += `<text x="${cx}" y="${H - 8}" text-anchor="middle" font-size="12" fill="#64708A">${MESES[Number(m[1]) - 1]}</text>`;
+    });
+    return `<svg class="chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${g}</svg>`;
+  }
+
+  function dona(items) {
+    if (!items.length) return '<div class="empty">Sin gastos este mes.</div>';
+    const total = items.reduce((a, b) => a + b.valor, 0);
+    const top = items.slice(0, 6);
+    const resto = items.slice(6).reduce((a, b) => a + b.valor, 0);
+    if (resto) top.push({ categoria: 'Otras', valor: resto });
+    const R = 54, C = 2 * Math.PI * R;
+    let off = 0, arcos = '';
+    top.forEach((it, i) => {
+      const len = (it.valor / total) * C;
+      arcos += `<circle r="${R}" cx="70" cy="70" fill="none" stroke="${PALETA[i % PALETA.length]}" stroke-width="20" stroke-dasharray="${len} ${C - len}" stroke-dashoffset="${-off}" transform="rotate(-90 70 70)"><title>${esc(it.categoria)} ${pesos(it.valor)}</title></circle>`;
+      off += len;
+    });
+    return `<div class="donut-wrap"><svg width="140" height="140" viewBox="0 0 140 140">${arcos}
+      <text x="70" y="66" text-anchor="middle" font-size="11" fill="#64708A">Total</text>
+      <text x="70" y="84" text-anchor="middle" font-size="14" font-weight="700" fill="#00338D">${total >= 1e6 ? (total / 1e6).toFixed(1) + ' M' : Math.round(total / 1e3) + ' mil'}</text></svg>
+      <div class="donut-list">${top.map((it, i) => `<div><span><i style="display:inline-block;width:10px;height:10px;border-radius:3px;background:${PALETA[i % PALETA.length]};margin-right:6px"></i>${esc(it.categoria)}</span><b class="num">${pesos(it.valor)}</b></div>`).join('')}</div></div>`;
+  }
+
+  function barraPpto(etiqueta, ejecutado, presupuesto, esperado, gasto) {
+    const pct = presupuesto ? Math.round((ejecutado / presupuesto) * 100) : 0;
+    const alerta = gasto ? pct > Math.round(esperado * 100) + 10 : false;
+    return `<div class="bar-row"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(etiqueta)}</span>
+      <b>${pesos(ejecutado)} <span class="muted" style="font-weight:400">de ${pesos(presupuesto)}</span></b></div>
+      <div class="track" style="position:relative"><div class="fill" style="width:${Math.min(100, Math.max(presupuesto ? 2 : 0, pct))}%;${alerta ? 'background:var(--dorado)' : ''}"></div>
+      ${presupuesto ? `<i title="Esperado a la fecha" style="position:absolute;top:-2px;bottom:-2px;left:${Math.min(100, esperado * 100)}%;width:2px;background:var(--azul-900)"></i>` : ''}</div>
+      <div class="muted" style="font-size:12px">${presupuesto ? pct + '% ejecutado' + (alerta ? ' · por encima de lo esperado' : '') : 'Sin presupuesto definido'}</div></div>`;
+  }
+
+  function resumenPpto(p) {
+    if (!p.ingresos.presupuesto && !p.egresos.presupuesto) {
+      return `<div class="empty" style="padding:16px">Aún no hay presupuesto para ${p.anio}. ${puede('presupuesto.editar') ? '<a href="#" data-vista="presupuesto">Definirlo</a>' : ''}</div>`;
+    }
+    return barraPpto('Ingresos', p.ingresos.ejecutado, p.ingresos.presupuesto, p.fraccionAnio, false) +
+      barraPpto('Gastos', p.egresos.ejecutado, p.egresos.presupuesto, p.fraccionAnio, true) +
+      '<div class="muted" style="font-size:12px">La línea oscura marca lo esperado a la fecha.</div>';
+  }
+
+  function barrasH(items) {
+    if (!items.length) return '<div class="empty">Sin ingresos este mes.</div>';
+    const max = items[0].valor || 1;
+    return items.map((it) => `<div class="bar-row"><div style="display:flex;justify-content:space-between"><span>${esc(it.categoria)}</span><b>${pesos(it.valor)}</b></div>
+      <div class="track"><div class="fill" style="width:${Math.max(3, (it.valor / max) * 100)}%"></div></div></div>`).join('');
+  }
+
+  // ───────────────────────── Movimientos ─────────────────────────
+  function badgeTipo(t) {
+    return t === 'INGRESO' ? '<span class="badge b-ing">Ingreso</span>' : t === 'EGRESO' ? '<span class="badge b-egr">Gasto</span>' : '<span class="badge b-tr">Traslado</span>';
+  }
+
+  function tablaMovs(movs, compacta) {
+    if (!movs.length) return '<div class="empty">No hay movimientos para mostrar.</div>';
+    const filas = movs.map((m) => `<tr class="${m.estado !== 'ACTIVO' ? 'anulado' : ''}">
+      <td><b>${esc(m.numero)}</b><div class="muted" style="font-size:12.5px">${fechaCorta(m.fecha)}</div></td>
+      ${compacta ? `<td>${badgeTipo(m.tipo)}</td>` : ''}
+      <td>${esc(m.categoria)}${compacta || m.concepto === m.categoria ? '' : `<div class="muted" style="font-size:12.5px">${esc(m.concepto)}</div>`}</td>
+      <td>${esc(m.tipo === 'TRASLADO' ? `${CUENTA(m.cuenta)} → ${CUENTA(m.cuenta_destino)}` : m.tercero || (compacta ? m.concepto : '—'))}</td>
+      ${compacta ? '' : `<td>${esc(m.medio_pago)}${m.referencia ? `<div class="muted" style="font-size:12.5px">Ref. ${esc(m.referencia)}</div>` : ''}</td>`}
+      <td class="num"><b>${pesos(m.valor)}</b></td>
+      ${compacta ? '' : `<td>${m.estado === 'ACTIVO' ? (m.cierre_id ? `<span class="badge b-tr">${ico('lock').replace('<svg', '<svg width="11" height="11"')} ${esc(m.cierre_id)}</span>` : '<span class="badge b-ok">Activo</span>') : `<span class="badge b-bad" title="${esc(m.motivo_anulacion)}">Anulado</span>`}</td>
+      <td style="white-space:nowrap">
+        <button class="btn ghost sm" data-act="pdfMov" data-id="${m.id}" title="Comprobante PDF">${ico('pdf')}</button>
+        ${puede('movimientos.anular') && m.estado === 'ACTIVO' && !m.cierre_id ? `<button class="btn danger sm" data-act="anular" data-id="${m.id}" data-num="${esc(m.numero)}">Anular</button>` : ''}
+      </td>`}
+    </tr>`).join('');
+    return `<div class="table-wrap"><table><thead><tr><th>N.º / Fecha</th>${compacta ? '<th>Tipo</th>' : ''}<th>Categoría</th><th>${compacta ? 'Detalle' : 'Beneficiario'}</th>${compacta ? '' : '<th>Medio</th>'}<th class="num">Valor</th>${compacta ? '' : '<th>Estado</th><th></th>'}</tr></thead><tbody>${filas}</tbody></table></div>`;
+  }
+
+  function inicioMes() { return S.ini.hoy.slice(0, 8) + '01'; }
+
+  async function vMovimientos(tipo) {
+    const esIng = tipo === 'INGRESO';
+    $('#pageSubtitle').textContent = esIng ? 'Diezmos, ofrendas y demás ingresos' : 'Pagos y gastos de la congregación';
+    if (puede('movimientos.crear')) {
+      acciones(`<button class="btn gold" data-act="${esIng ? 'nuevoIngreso' : 'nuevoEgreso'}">${ico('plus')}<span>${esIng ? 'Registrar ingreso' : 'Registrar gasto'}</span></button>`);
+    }
+    const cats = S.ini.categorias.filter((c) => c.tipo === tipo);
+    S.filtro = S.filtro && S.filtro.tipo === tipo ? S.filtro : { tipo, desde: inicioMes(), hasta: S.ini.hoy, categoria: '', incluirAnulados: false };
+    $('#view').innerHTML = `<div class="card"><div class="filters" id="filtros">
+        ${campo('fDesde', 'Desde', `<input type="date" name="desde" id="fDesde" value="${S.filtro.desde}">`)}
+        ${campo('fHasta', 'Hasta', `<input type="date" name="hasta" id="fHasta" value="${S.filtro.hasta}">`)}
+        ${campo('fCat', 'Categoría', `<select name="categoria" id="fCat"><option value="">Todas</option>${opciones(cats.map((c) => c.nombre), S.filtro.categoria)}</select>`)}
+        <label style="display:flex;gap:6px;align-items:center;padding-bottom:10px"><input type="checkbox" name="incluirAnulados" ${S.filtro.incluirAnulados ? 'checked' : ''}> Ver anulados</label>
+        <button class="btn" data-act="filtrar">Consultar</button>
+      </div></div>
+      <div class="grid g-3" id="totales"></div>
+      <div class="card" id="listado"><div class="empty">Cargando…</div></div>`;
+    await cargarMovs();
+  }
+
+  async function cargarMovs() {
+    Object.assign(S.filtro, leerForm($('#filtros')));
+    const movs = await api('listarMovimientos', S.filtro);
+    S.movs = movs;
+    const activos = movs.filter((m) => m.estado === 'ACTIVO');
+    const total = activos.reduce((a, m) => a + Number(m.valor), 0);
+    const efectivo = activos.filter((m) => m.cuenta === 'CAJA').reduce((a, m) => a + Number(m.valor), 0);
+    const tercera = S.filtro.tipo === 'INGRESO'
+      ? ['Diezmos', activos.filter((m) => /^diezmo/i.test(m.categoria)).reduce((a, m) => a + Number(m.valor), 0), 'heart']
+      : ['Movimientos', activos.length, 'log'];
+    $('#totales').innerHTML = `
+      <div class="card kpi"><div class="ico ${S.filtro.tipo === 'INGRESO' ? 't-cyan' : 't-dorado'}">${ico(S.filtro.tipo === 'INGRESO' ? 'in' : 'out')}</div><div><small>Total del periodo</small><b>${pesos(total)}</b><div class="foot">${activos.length} registro(s)</div></div></div>
+      <div class="card kpi"><div class="ico t-azul">${ico('cash')}</div><div><small>En efectivo</small><b>${pesos(efectivo)}</b><div class="foot">Nequi ${pesos(total - efectivo)}</div></div></div>
+      <div class="card kpi"><div class="ico t-azul">${ico(tercera[2])}</div><div><small>${tercera[0]}</small><b>${typeof tercera[1] === 'number' && tercera[0] === 'Movimientos' ? tercera[1] : pesos(tercera[1])}</b></div></div>`;
+    $('#listado').innerHTML = tablaMovs(movs, false);
+  }
+
+  function formMovimiento(tipo) {
+    const esIng = tipo === 'INGRESO';
+    const cats = S.ini.categorias.filter((c) => c.tipo === tipo && c.activa === 'SI');
+    const body = abrirModal(esIng ? 'Registrar ingreso' : 'Registrar gasto', `
+      <form class="form" id="fMov" autocomplete="off">
+        ${campo('mFecha', 'Fecha', `<input type="date" name="fecha" id="mFecha" value="${S.ini.hoy}" max="${S.ini.hoy}" required>`)}
+        ${campo('mCat', 'Categoría', `<select name="categoria" id="mCat" required>${opciones(cats.map((c) => c.nombre))}</select>`)}
+        ${esIng ? '' : `
+          ${campo('mTercero', 'Pagado a', '<input name="tercero" id="mTercero" required>')}
+          ${campo('mDoc', 'Documento / NIT (opcional)', '<input name="tercero_doc" id="mDoc">')}`}
+        ${campo('mMedio', esIng ? 'Recibido en' : 'Pagado con', `<select name="medio_pago" id="mMedio">${opciones(S.ini.medios)}</select>`)}
+        ${campo('mRef', 'Referencia Nequi', '<input name="referencia" id="mRef" placeholder="N.º de la transacción">')}
+        ${campo('mValor', esIng ? 'Valor total (COP)' : 'Valor (COP)', '<input name="valor" id="mValor" inputmode="numeric" class="money" placeholder="0" required>', 'full')}
+        ${campo('mConcepto', esIng ? 'Concepto (opcional)' : 'Concepto', `<textarea name="concepto" id="mConcepto" rows="2" ${esIng ? '' : 'required'} placeholder="${esIng ? 'Ej.: Diezmos culto dominical' : 'Ej.: Pago factura de energía'}"></textarea>`, 'full')}
+        ${esIng ? '<p class="full muted" style="margin:0;font-size:13px">Se registra el valor total recogido, sin nombres de quienes aportaron.</p>' : ''}
+        <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" type="submit">Guardar</button></div>
+      </form>`);
+    const medio = $('#mMedio', body);
+    const verRef = () => { $('#mRef', body).closest('.field').hidden = medio.value !== 'Nequi'; };
+    medio.addEventListener('change', verRef); verRef();
+    inputDinero($('#mValor', body));
+    $('#fMov', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const d = leerForm(ev.target);
+      d.tipo = tipo;
+      d.valor = soloDigitos(d.valor);
+      const r = await ocupado(ev.submitter, () => api('crearMovimiento', d));
+      cerrarModal();
+      toast(`${r.numero} registrado por ${pesos(r.valor)}.`);
+      ir(S.vista);
+    });
+  }
+
+  async function anular(id, num) {
+    const motivo = prompt(`Motivo para anular ${num}:`);
+    if (motivo == null) return;
+    await ocupado(null, () => api('anularMovimiento', { id, motivo }));
+    toast(`${num} anulado.`);
+    ir(S.vista);
+  }
+
+  function descargar(nombre, base64) {
+    const bin = atob(base64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    const xls = /\.xlsx$/i.test(nombre);
+    const url = URL.createObjectURL(new Blob([bytes], { type: xls ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/pdf' }));
+    const a = document.createElement('a');
+    a.href = url; a.download = xls || /\.pdf$/i.test(nombre) ? nombre : nombre + '.pdf';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  async function abrirPdf(accion, datos, btn) {
+    let r = await ocupado(btn, () => api(accion, datos));
+    if (!r.contenido) r = await ocupado(btn, () => api('descargarPdf', { url: r.url }));
+    descargar(r.nombre, r.contenido);
+    toast('PDF descargado y guardado en Drive: ' + r.nombre);
+  }
+
+  async function verPdf(url, btn) {
+    const r = await ocupado(btn, () => api('descargarPdf', { url }));
+    descargar(r.nombre, r.contenido);
+  }
+
+
+  // ───────────────────────── Caja diaria ─────────────────────────
+  async function vCaja() {
+    $('#pageSubtitle').textContent = 'Arqueo con doble control, cierre diario y traslados entre caja y Nequi';
+    let a = '';
+    if (puede('reportes.ver')) a += `<button class="btn ghost" data-act="pdfDia">${ico('pdf')}<span>PDF del día</span></button>`;
+    if (puede('movimientos.crear')) a += `<button class="btn cyan" data-act="traslado">${ico('swap')}<span>Caja ↔ Nequi</span></button>`;
+    acciones(a);
+    S.fechaCaja = S.fechaCaja || S.ini.hoy;
+    $('#view').innerHTML = `
+      ${puede('caja.cerrar') ? `<div class="card"><div class="filters">${campo('cFecha', 'Fecha de caja', `<input type="date" id="cFecha" value="${S.fechaCaja}" max="${S.ini.hoy}">`)}</div></div>
+      <div class="grid g-2" id="cierreZona"><div class="card empty">Cargando…</div></div>` : ''}
+      <div class="card"><div class="card-head"><h3>Historial de cierres</h3></div><div id="histCierres"><div class="empty">Cargando…</div></div></div>`;
+    if (puede('caja.cerrar')) {
+      $('#cFecha').addEventListener('change', (e) => { S.fechaCaja = e.target.value; cargarCierre(); });
+      cargarCierre();
+    }
+    const cierres = await api('listarCierres');
+    $('#histCierres').innerHTML = cierres.length ? `<div class="table-wrap"><table><thead><tr><th>Cierre</th><th>Fecha</th><th class="num">Esperado</th><th class="num">Contado</th><th class="num">Diferencia</th><th>Estado</th><th>Contó / verificó</th><th></th></tr></thead><tbody>
+      ${cierres.map((c) => `<tr><td><b>${esc(c.id)}</b></td><td>${fechaCorta(c.fecha)}</td><td class="num">${pesos(c.saldo_esperado_caja)}</td><td class="num">${pesos(c.efectivo_contado)}</td>
+        <td class="num" style="color:${Number(c.diferencia) ? 'var(--danger)' : 'var(--ok)'}"><b>${pesos(c.diferencia)}</b></td>
+        <td>${c.estado === 'CERRADO' ? '<span class="badge b-ok">Cerrado</span>' : '<span class="badge b-egr">Reabierto</span>'}</td>
+        <td class="muted" style="font-size:13px">${esc(c.cerrado_por)}<br>${esc(c.verificado_por)}</td>
+        <td style="white-space:nowrap">${c.pdf_url ? `<a class="btn ghost sm" href="#" data-act="verPdf" data-url="${esc(c.pdf_url)}">${ico('pdf')}</a>` : ''}
+        ${puede('caja.reabrir') && c.estado === 'CERRADO' ? `<button class="btn danger sm" data-act="reabrir" data-id="${esc(c.id)}">Reabrir</button>` : ''}</td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">Aún no hay cierres de caja.</div>';
+  }
+
+  async function cargarCierre() {
+    const z = $('#cierreZona');
+    z.innerHTML = '<div class="card empty">Cargando…</div>';
+    const d = await api('previaCierre', { fecha: S.fechaCaja });
+    const resumen = `<div class="card"><div class="card-head"><h3>Movimiento de caja · ${fechaCorta(d.fecha)}</h3>${d.cerrado ? `<span class="badge b-ok">${ico('lock').replace('<svg', '<svg width="11" height="11"')} Cerrada</span>` : '<span class="badge b-egr">Abierta</span>'}</div>
+      <div class="summary">
+        <div><span>Saldo inicial en caja</span><b>${pesos(d.saldoInicialCaja)}</b></div>
+        <div><span>(+) Entradas de efectivo</span><b>${pesos(d.ingresosCaja)}</b></div>
+        <div><span>(−) Salidas de efectivo</span><b>${pesos(d.egresosCaja)}</b></div>
+        <div class="total"><span>Saldo esperado en caja</span><span>${pesos(d.saldoEsperadoCaja)}</span></div>
+        <div><span>Saldo en Nequi al cierre</span><b>${pesos(d.saldoNequi)}</b></div>
+        <div><span>Movimientos del día</span><b>${d.movimientos.length}</b></div>
+      </div></div>`;
+    const arqueo = d.cerrado
+      ? `<div class="card"><div class="card-head"><h3>Arqueo</h3></div><div class="alert info">${ico('lock')}<div>Este día ya fue cerrado. Consulte el PDF en el historial. ${puede('caja.reabrir') ? 'Un administrador puede reabrirlo si hace falta corregir.' : ''}</div></div></div>`
+      : `<div class="card"><div class="card-head"><h3>Arqueo de efectivo</h3><span class="muted">Cuenten entre dos personas</span></div>
+        <form id="fArqueo"><div class="denoms">${S.ini.denominaciones.map((v) => `<label class="denom"><span>${v >= 2000 ? 'Billete' : 'Moneda'} ${pesos(v)}</span><input type="number" min="0" step="1" data-den="${v}" placeholder="0"></label>`).join('')}</div>
+        <div class="summary" style="margin-top:14px">
+          <div><span>Total contado</span><b id="aContado">$ 0</b></div>
+          <div class="total"><span>Diferencia</span><span id="aDif">${pesos(-d.saldoEsperadoCaja)}</span></div>
+        </div>
+        <div class="form" style="margin-top:6px">
+          ${campo('aVer', 'Verificó el conteo (segunda persona)', `<input id="aVer" value="${esc(d.verificador || '')}" placeholder="Nombre del diácono o verificador" required>`, 'full')}
+          ${campo('aObs', 'Observaciones', '<textarea id="aObs" rows="2" placeholder="Obligatorio si hay diferencia"></textarea>', 'full')}
+        </div>
+        <div class="form-actions" style="margin-top:12px"><button class="btn gold" type="submit">${ico('lock')} Cerrar caja y generar PDF</button></div></form></div>`;
+    z.innerHTML = resumen + arqueo;
+    const f = $('#fArqueo');
+    if (!f) return;
+    const contar = () => {
+      let t = 0; const den = {};
+      $$('[data-den]', f).forEach((i) => { const n = Math.max(0, Math.floor(Number(i.value) || 0)); if (n) den[i.dataset.den] = n; t += n * Number(i.dataset.den); });
+      $('#aContado').textContent = pesos(t);
+      const dif = t - d.saldoEsperadoCaja;
+      $('#aDif').textContent = pesos(dif);
+      $('#aDif').style.color = dif ? 'var(--danger)' : 'var(--ok)';
+      return den;
+    };
+    f.addEventListener('input', contar); contar();
+    f.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      if (!confirm(`¿Cerrar la caja del ${fechaCorta(d.fecha)}? Después no se podrán registrar ni anular movimientos de ese día.`)) return;
+      const c = await ocupado(ev.submitter, () => api('cerrarCaja', { fecha: d.fecha, denominaciones: contar(), verificado_por: $('#aVer').value, observaciones: $('#aObs').value }));
+      toast(`Caja cerrada (${c.id}). PDF guardado en Drive.`);
+      if (c.pdf_url) verPdf(c.pdf_url);
+      ir('caja');
+    });
+  }
+
+  function formTraslado() {
+    const body = abrirModal('Mover dinero entre caja y Nequi', `<form class="form" id="fTr">
+      ${campo('tCuenta', 'Movimiento', `<select name="cuenta" id="tCuenta">${opciones([{ v: 'CAJA', t: 'Depósito: caja → Nequi' }, { v: 'NEQUI', t: 'Retiro: Nequi → caja' }])}</select>`)}
+      ${campo('tFecha', 'Fecha', `<input type="date" name="fecha" id="tFecha" value="${S.ini.hoy}" max="${S.ini.hoy}">`)}
+      ${campo('tValor', 'Valor (COP)', '<input name="valor" id="tValor" inputmode="numeric" class="money" required>', 'full')}
+      ${campo('tRef', 'Referencia Nequi', '<input name="referencia" id="tRef">', 'full')}
+      ${campo('tCon', 'Concepto', '<input name="concepto" id="tCon" placeholder="Opcional">', 'full')}
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" type="submit">Registrar</button></div></form>`);
+    inputDinero($('#tValor', body));
+    $('#fTr', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const d = leerForm(ev.target); d.tipo = 'TRASLADO'; d.valor = soloDigitos(d.valor);
+      const r = await ocupado(ev.submitter, () => api('crearMovimiento', d));
+      cerrarModal(); toast(`${r.numero} registrado.`); ir(S.vista);
+    });
+  }
+
+  // ───────────────────────── Nequi y conciliación ─────────────────────────
+  async function vNequi() {
+    $('#pageSubtitle').textContent = 'Movimientos de la cuenta Nequi y conciliación con la app';
+    if (puede('movimientos.crear')) acciones(`<button class="btn cyan" data-act="traslado">${ico('swap')}<span>Caja ↔ Nequi</span></button>`);
+    $('#view').innerHTML = `${puede('nequi.conciliar') ? '<div id="concZona"><div class="card empty">Cargando…</div></div>' : ''}
+      <div class="card"><div class="card-head"><h3>Conciliaciones anteriores</h3></div><div id="histConc"><div class="empty">Cargando…</div></div></div>`;
+    if (puede('nequi.conciliar')) cargarConciliacion(S.ini.hoy);
+    const h = await api('listarConciliaciones');
+    $('#histConc').innerHTML = h.length ? `<div class="table-wrap"><table><thead><tr><th>Conciliación</th><th>Corte</th><th class="num">Sistema</th><th class="num">App Nequi</th><th class="num">Diferencia</th><th class="num">Verificados</th><th></th></tr></thead><tbody>
+      ${h.map((c) => `<tr><td><b>${esc(c.id)}</b></td><td>${fechaCorta(c.fecha)}</td><td class="num">${pesos(c.saldo_sistema)}</td><td class="num">${pesos(c.saldo_nequi)}</td>
+        <td class="num" style="color:${Number(c.diferencia) ? 'var(--danger)' : 'var(--ok)'}"><b>${pesos(c.diferencia)}</b></td><td class="num">${esc(c.movimientos)}</td>
+        <td>${c.pdf_url ? `<a class="btn ghost sm" href="#" data-act="verPdf" data-url="${esc(c.pdf_url)}">${ico('pdf')}</a>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty">Aún no se ha conciliado Nequi.</div>';
+  }
+
+  async function cargarConciliacion(fecha) {
+    const z = $('#concZona');
+    const d = await api('previaConciliacion', { fecha });
+    z.innerHTML = `<div class="grid g-21">
+      <div class="card"><div class="card-head"><h3>Movimientos por verificar en Nequi</h3>
+        <button class="btn ghost sm" id="marcarTodos">${ico('check')} Marcar todos</button></div>
+        <p class="muted" style="margin-top:-6px;font-size:13.5px">Abra el historial en la app de Nequi y marque los movimientos que aparecen allí.</p>
+        ${d.pendientes.length ? `<div class="table-wrap"><table><thead><tr><th></th><th>N.º / Fecha</th><th>Categoría</th><th>Referencia</th><th class="num">Valor</th></tr></thead><tbody>
+          ${d.pendientes.map((m) => `<tr><td><input type="checkbox" data-conc="${esc(m.id)}"></td><td><b>${esc(m.numero)}</b><div class="muted" style="font-size:12.5px">${fechaCorta(m.fecha)}</div></td>
+            <td>${esc(m.categoria)}</td><td>${esc(m.referencia || '—')}</td><td class="num" style="color:${m.efecto < 0 ? 'var(--danger)' : 'inherit'}"><b>${pesos(m.efecto)}</b></td></tr>`).join('')}
+          </tbody></table></div>` : '<div class="empty">No hay movimientos pendientes por verificar.</div>'}</div>
+      <div class="card"><div class="card-head"><h3>Conciliar</h3>${d.ultima ? `<span class="muted">Última: ${fechaCorta(d.ultima.fecha)}</span>` : ''}</div>
+        <form id="fConc" class="form" style="grid-template-columns:1fr">
+          ${campo('nFecha', 'Fecha de corte', `<input type="date" id="nFecha" value="${d.fecha}" max="${S.ini.hoy}">`)}
+          <div class="summary"><div><span>Saldo según el sistema</span><b>${pesos(d.saldoSistema)}</b></div></div>
+          ${campo('nSaldo', 'Saldo que muestra la app Nequi', '<input id="nSaldo" inputmode="numeric" class="money" placeholder="0" required>')}
+          <div class="summary"><div class="total"><span>Diferencia</span><span id="nDif">—</span></div></div>
+          ${campo('nObs', 'Observaciones', '<textarea id="nObs" rows="2" placeholder="Obligatorio si hay diferencia"></textarea>')}
+          <div class="form-actions"><button class="btn gold" type="submit">${ico('check')} Conciliar y generar PDF</button></div>
+        </form></div></div>`;
+    $('#nFecha').addEventListener('change', (e) => cargarConciliacion(e.target.value));
+    const saldo = $('#nSaldo'); inputDinero(saldo);
+    saldo.addEventListener('input', () => {
+      const dif = soloDigitos(saldo.value) - d.saldoSistema;
+      $('#nDif').textContent = saldo.value ? pesos(dif) : '—';
+      $('#nDif').style.color = dif ? 'var(--danger)' : 'var(--ok)';
+    });
+    $('#marcarTodos').addEventListener('click', () => $$('[data-conc]').forEach((c) => { c.checked = true; }));
+    $('#fConc').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const ids = $$('[data-conc]').filter((c) => c.checked).map((c) => c.dataset.conc);
+      const c = await ocupado(ev.submitter, () => api('conciliarNequi', { fecha: $('#nFecha').value, saldo_nequi: soloDigitos(saldo.value), ids, observaciones: $('#nObs').value }));
+      toast(`Conciliación ${c.id} guardada.`);
+      if (c.pdf_url) verPdf(c.pdf_url);
+      ir('nequi');
+    });
+  }
+
+  // ───────────────────────── Presupuesto anual ─────────────────────────
+  async function vPresupuesto() {
+    $('#pageSubtitle').textContent = 'Presupuesto anual por categoría frente a lo ejecutado';
+    const anioActual = Number(S.ini.hoy.slice(0, 4));
+    S.anioPpto = S.anioPpto || anioActual;
+    const editar = puede('presupuesto.editar');
+    if (editar) acciones(`<button class="btn gold" data-act="guardarPpto">${ico('check')}<span>Guardar presupuesto</span></button>`);
+    $('#view').innerHTML = `<div class="card"><div class="filters">
+        ${campo('pAnio', 'Año', `<select id="pAnio">${opciones([anioActual - 1, anioActual, anioActual + 1], S.anioPpto)}</select>`)}
+      </div></div><div id="pptoZona"><div class="card empty">Cargando…</div></div>`;
+    $('#pAnio').addEventListener('change', (e) => { S.anioPpto = Number(e.target.value); vPresupuesto(); });
+    const p = await api('obtenerPresupuesto', { anio: S.anioPpto });
+    S.ppto = p;
+    const tabla = (tipo, titulo) => {
+      const filas = p.filas.filter((f) => f.tipo === tipo);
+      return `<div class="card"><div class="card-head"><h3>${titulo}</h3></div><div class="table-wrap"><table><thead><tr><th>Categoría</th><th class="num">Presupuesto anual</th><th class="num">Ejecutado</th><th style="width:30%">Avance</th></tr></thead><tbody>
+        ${filas.map((f) => {
+          const pct = f.presupuesto ? Math.round(f.ejecutado * 100 / f.presupuesto) : 0;
+          const alto = tipo === 'EGRESO' && f.presupuesto && pct > Math.round(p.fraccionAnio * 100) + 10;
+          return `<tr><td>${esc(f.categoria)}</td>
+          <td class="num">${editar ? `<input data-ppto="${esc(tipo + '|' + f.categoria)}" inputmode="numeric" value="${f.presupuesto ? f.presupuesto.toLocaleString('es-CO') : ''}" placeholder="0" style="width:140px;text-align:right;border:1px solid var(--line);border-radius:8px;padding:6px 8px">` : pesos(f.presupuesto)}</td>
+          <td class="num">${pesos(f.ejecutado)}</td>
+          <td><div class="track" style="height:8px;background:#EDF1F8;border-radius:99px;overflow:hidden"><div style="height:100%;width:${Math.min(100, pct)}%;background:${alto ? 'var(--dorado)' : 'var(--cyan)'}"></div></div>
+            <span class="muted" style="font-size:12px">${f.presupuesto ? pct + '%' : '—'}</span></td></tr>`;
+        }).join('')}</tbody></table></div></div>`;
+    };
+    $('#pptoZona').innerHTML = `<div class="grid g-2" style="margin-bottom:20px">
+        <div class="card">${barraPpto('Ingresos ' + p.anio, p.ingresos.ejecutado, p.ingresos.presupuesto, p.fraccionAnio, false)}</div>
+        <div class="card">${barraPpto('Gastos ' + p.anio, p.egresos.ejecutado, p.egresos.presupuesto, p.fraccionAnio, true)}</div></div>
+      <div class="grid">${tabla('INGRESO', 'Ingresos')}${tabla('EGRESO', 'Gastos')}</div>`;
+    $$('[data-ppto]').forEach(inputDinero);
+  }
+
+  async function guardarPpto(btn) {
+    const valores = {};
+    $$('[data-ppto]').forEach((i) => { valores[i.dataset.ppto] = soloDigitos(i.value); });
+    await ocupado(btn, () => api('guardarPresupuesto', { anio: S.anioPpto, valores }));
+    toast('Presupuesto guardado.');
+    vPresupuesto();
+  }
+
+  // ───────────────────────── Miembros ─────────────────────────
+  async function vMiembros() {
+    $('#pageSubtitle').textContent = 'Directorio de la congregación';
+    if (puede('miembros.editar')) acciones(`<button class="btn gold" data-act="nuevoMiembro">${ico('plus')}<span>Nuevo miembro</span></button>`);
+    S.miembros = await api('listarMiembros');
+    const activos = S.miembros.filter((m) => m.estado === 'Activo');
+    const cuenta = (g) => activos.filter((m) => (m.genero || '') === g).length;
+    let filtro = '';
+    $('#view').innerHTML = `<div class="card"><div class="card-head"><h3>${activos.length} miembro(s) activo(s) · ${cuenta('Masculino')} hermanos · ${cuenta('Femenino')} hermanas</h3>
+      <div class="field" style="width:min(320px,100%)"><input id="bMiembro" placeholder="Buscar por nombre o teléfono"></div></div>
+      <div class="card-head" style="flex-wrap:wrap;gap:10px">
+        <div class="seg" id="segGenero"><button class="on" data-g="">Todos</button><button data-g="Masculino">Hermanos</button><button data-g="Femenino">Hermanas</button></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <label style="display:flex;gap:6px;align-items:center;font-size:14px"><input type="checkbox" id="mInact"> Incluir inactivos</label>
+          <button class="btn ghost sm" id="pdfMiembros">${ico('pdf')}<span>Descargar PDF</span></button></div></div>
+      ${cuenta('') ? `<p class="muted" style="margin:0 0 10px">${cuenta('')} miembro(s) activo(s) sin género registrado. Edítelos para que salgan en el reporte correcto.</p>` : ''}
+      <div id="tMiembros"></div></div>`;
+    const pintar = () => {
+      const q = $('#bMiembro').value.toLowerCase().trim();
+      const lista = S.miembros.filter((m) => (!filtro || m.genero === filtro) && (!q || `${m.nombre} ${m.telefono}`.toLowerCase().includes(q)));
+      $('#tMiembros').innerHTML = lista.length ? `<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Género</th><th>Edad</th><th>Teléfono</th><th>Correo</th><th>Dirección</th><th>Estado</th><th></th></tr></thead><tbody>
+        ${lista.map((m) => `<tr><td><b>${esc(m.nombre)}</b></td><td>${esc(m.genero || '—')}</td><td>${edad(m.fecha_nacimiento)}</td><td>${esc(m.telefono || '—')}</td><td>${esc(m.email || '—')}</td><td>${esc(m.direccion || '—')}</td>
+          <td><span class="badge ${m.estado === 'Activo' ? 'b-ok' : 'b-egr'}">${esc(m.estado)}</span></td>
+          <td>${puede('miembros.editar') ? `<button class="btn ghost sm" data-act="editarMiembro" data-id="${esc(m.id)}">Editar</button>` : ''}</td></tr>`).join('')}
+        </tbody></table></div>` : '<div class="empty">No se encontraron miembros.</div>';
+    };
+    $('#segGenero').addEventListener('click', (ev) => {
+      const b = ev.target.closest('button'); if (!b) return;
+      filtro = b.dataset.g;
+      document.querySelectorAll('#segGenero button').forEach((x) => x.classList.toggle('on', x === b));
+      pintar();
+    });
+    $('#pdfMiembros').addEventListener('click', (ev) => abrirPdf('pdfMiembros', { genero: filtro, estado: $('#mInact').checked ? 'Todos' : 'Activo' }, ev.currentTarget));
+    $('#bMiembro').addEventListener('input', pintar); pintar();
+  }
+
+  function edad(nac) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(nac || ''))) return '—';
+    const h = S.ini.hoy.split('-').map(Number), n = String(nac).split('-').map(Number);
+    return h[0] - n[0] - ((h[1] < n[1] || (h[1] === n[1] && h[2] < n[2])) ? 1 : 0);
+  }
+
+  function formMiembro(id) {
+    const m = (S.miembros || []).find((x) => x.id === id) || { estado: 'Activo' };
+    const body = abrirModal(id ? 'Editar miembro' : 'Nuevo miembro', `<form class="form" id="fMiembro">
+      <input type="hidden" name="id" value="${esc(m.id || '')}">
+      ${campo('nNom', 'Nombre completo', `<input name="nombre" id="nNom" value="${esc(m.nombre)}" required>`, 'full')}
+      ${campo('nGen', 'Género', `<select name="genero" id="nGen" required><option value="">Seleccione…</option>${opciones(['Masculino', 'Femenino'], m.genero)}</select>`)}
+      ${campo('nNac', 'Fecha de nacimiento', `<input type="date" name="fecha_nacimiento" id="nNac" value="${esc(m.fecha_nacimiento)}" max="${S.ini.hoy}">`)}
+      ${campo('nTel', 'Teléfono (opcional)', `<input name="telefono" id="nTel" inputmode="tel" value="${esc(m.telefono)}">`)}
+      ${campo('nEmail', 'Correo (opcional)', `<input type="email" name="email" id="nEmail" value="${esc(m.email)}">`)}
+      ${campo('nDir', 'Dirección (opcional)', `<input name="direccion" id="nDir" value="${esc(m.direccion)}">`)}
+      ${campo('nEst', 'Estado', `<select name="estado" id="nEst">${opciones(['Activo', 'Inactivo'], m.estado)}</select>`)}
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" type="submit">Guardar</button></div></form>`);
+    $('#fMiembro', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      S.miembros = await ocupado(ev.submitter, () => api('guardarMiembro', leerForm(ev.target)));
+      cerrarModal(); toast('Miembro guardado.'); ir('miembros');
+    });
+  }
+
+  // ───────────────────────── Eventos (agenda sin cruces de horario) ─────────────────────────
+  const DIAS_SEM = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+  const isoFecha = (dt) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  const puedeEditarEvt = (e) => puede('eventos.gestionar') || String(e.creado_por).toLowerCase() === S.ini.usuario.email;
+  const cruce = (fecha, ini, fin, id) => (S.eventos || []).find((e) => e.id !== id && e.fecha === fecha && e.hora_inicio < fin && ini < e.hora_fin);
+
+  async function vEventos() {
+    $('#pageSubtitle').textContent = 'Agenda general de la congregación. Dos eventos no pueden cruzarse en el mismo horario.';
+    acciones((puede('eventos.gestionar') ? `<button class="btn ghost" data-act="copiarEnlace">${ico('flag')}<span>Enlace para comités</span></button>` : '')
+      + (puede('eventos.crear') ? `<button class="btn gold" data-act="nuevoEvento">${ico('plus')}<span>Nuevo evento</span></button>` : ''));
+    S.evMes = S.evMes || S.ini.hoy.slice(0, 7);
+    S.eventos = await api('listarEventos', {});
+    const [y, m] = S.evMes.split('-').map(Number);
+    const ant = isoFecha(new Date(y, m - 2, 1)).slice(0, 7), sig = isoFecha(new Date(y, m, 1)).slice(0, 7);
+    const primero = new Date(y, m - 1, 1);
+    const inicio = new Date(y, m - 1, 1 - ((primero.getDay() + 6) % 7));
+    let celdas = DIAS_SEM.map((d) => `<div class="cal-h">${d}</div>`).join('');
+    for (let i = 0; i < 42; i++) {
+      const dt = new Date(inicio.getFullYear(), inicio.getMonth(), inicio.getDate() + i);
+      if (i >= 35 && dt.getMonth() !== m - 1) break;
+      const f = isoFecha(dt);
+      const fuera = dt.getMonth() !== m - 1, pasado = f < S.ini.hoy;
+      const evs = S.eventos.filter((e) => e.fecha === f);
+      const crear = !fuera && !pasado && puede('eventos.crear');
+      celdas += `<div class="cal-d ${fuera ? 'fuera' : ''} ${pasado && !fuera ? 'pasado' : ''} ${f === S.ini.hoy ? 'hoy' : ''}" ${crear ? `data-act="nuevoEvento" data-fecha="${f}" title="Agendar un evento este día"` : ''}>
+        <span class="n">${dt.getDate()}</span>
+        ${evs.map((e) => `<span class="cal-e" data-act="verEvento" data-id="${esc(e.id)}" title="${esc(e.hora_inicio + ' ' + e.titulo)}">${esc(e.hora_inicio)} ${esc(e.titulo)}</span>`).join('')}</div>`;
+    }
+    const proximos = S.eventos.filter((e) => e.fecha >= S.ini.hoy).slice(0, 12);
+    $('#view').innerHTML = `<div class="grid g-21">
+      <div class="card"><div class="card-head"><div class="sem-head">
+          <button class="icon-btn" data-act="mesEvt" data-mes="${ant}" aria-label="Mes anterior">‹</button>
+          <h3 style="min-width:150px;text-align:center">${MESES_L[m - 1].replace(/^./, (c) => c.toUpperCase())} ${y}</h3>
+          <button class="icon-btn" data-act="mesEvt" data-mes="${sig}" aria-label="Mes siguiente">›</button></div>
+          ${S.evMes !== S.ini.hoy.slice(0, 7) ? `<button class="btn ghost sm" data-act="mesEvt" data-mes="${S.ini.hoy.slice(0, 7)}">Hoy</button>` : ''}</div>
+        <div class="cal">${celdas}</div>
+        <p class="muted" style="margin:10px 0 0;font-size:13px">Toque un día para agendar un evento, o un evento para ver su detalle.</p></div>
+      <div class="card" style="align-self:start"><div class="card-head"><h3>Próximos eventos</h3></div>
+        ${proximos.length ? `<div class="lista-evt">${proximos.map((e) => {
+          const p = e.fecha.split('-');
+          return `<div class="evt" data-act="verEvento" data-id="${esc(e.id)}" style="cursor:pointer"><div class="evt-fecha"><b>${Number(p[2])}</b><small>${MESES[Number(p[1]) - 1]}</small></div>
+            <div class="evt-txt"><b>${esc(e.titulo)}</b><span>${esc(e.hora_inicio)} a ${esc(e.hora_fin)}${e.lugar ? ' · ' + esc(e.lugar) : ''}${e.comite ? ' · ' + esc(e.comite) : ''}</span></div></div>`;
+        }).join('')}</div>` : '<div class="empty">No hay eventos agendados.</div>'}</div>
+    </div>`;
+  }
+
+  function verEvento(id) {
+    const e = (S.eventos || []).find((x) => x.id === id);
+    if (!e) return;
+    const body = abrirModal(e.titulo, `<div class="summary">
+        <div><span class="muted">Fecha</span><b>${fechaCorta(e.fecha)}</b></div>
+        <div><span class="muted">Horario</span><b>${esc(e.hora_inicio)} a ${esc(e.hora_fin)}</b></div>
+        ${e.lugar ? `<div><span class="muted">Lugar</span><b>${esc(e.lugar)}</b></div>` : ''}
+        ${e.responsable ? `<div><span class="muted">Responsable</span><b>${esc(e.responsable)}</b></div>` : ''}
+        ${e.comite ? `<div><span class="muted">Comité</span><b>${esc(e.comite)}</b></div>` : ''}
+        <div><span class="muted">Agendado por</span><span>${esc(e.creado_por)}${e.origen === 'ENLACE' ? ' (enlace de comités)' : ''}</span></div></div>
+      ${e.descripcion ? `<p style="white-space:pre-wrap">${esc(e.descripcion)}</p>` : ''}
+      <div class="form-actions" style="margin-top:16px">
+        ${puedeEditarEvt(e) ? `<button class="btn danger" id="evCancelar">Cancelar evento</button><button class="btn ghost" id="evEditar">Editar</button>` : ''}
+        <button class="btn" data-close>Cerrar</button></div>`);
+    if (!puedeEditarEvt(e)) return;
+    $('#evEditar', body).addEventListener('click', () => formEvento(e));
+    $('#evCancelar', body).addEventListener('click', async (ev) => {
+      const motivo = prompt('Motivo de la cancelación:');
+      if (!motivo || !motivo.trim()) return;
+      await ocupado(ev.currentTarget, () => api('cancelarEvento', { id: e.id, motivo }));
+      cerrarModal(); toast('Evento cancelado.'); vEventos();
+    });
+  }
+
+  async function formEvento(e, fecha) {
+    if (!S.eventos) S.eventos = await api('listarEventos', {});
+    e = e || { fecha: fecha || S.ini.hoy, hora_inicio: '', hora_fin: '', lugar: 'Templo' };
+    const body = abrirModal(e.id ? 'Editar evento' : 'Nuevo evento', `<form class="form" id="fEvento">
+      <input type="hidden" name="id" value="${esc(e.id || '')}">
+      ${campo('eTit', 'Nombre del evento', `<input name="titulo" id="eTit" value="${esc(e.titulo)}" required placeholder="Ej.: Vigilia de jóvenes">`, 'full')}
+      ${campo('eFec', 'Fecha', `<input type="date" name="fecha" id="eFec" value="${esc(e.fecha)}" ${e.id ? '' : `min="${S.ini.hoy}"`} required>`, 'full')}
+      ${campo('eIni', 'Hora de inicio', `<input type="time" name="hora_inicio" id="eIni" value="${esc(e.hora_inicio)}" required>`)}
+      ${campo('eFin', 'Hora de terminación', `<input type="time" name="hora_fin" id="eFin" value="${esc(e.hora_fin)}" required>`)}
+      ${campo('eLug', 'Lugar', `<input name="lugar" id="eLug" value="${esc(e.lugar)}">`)}
+      ${campo('eRes', 'Responsable', `<input name="responsable" id="eRes" value="${esc(e.responsable)}">`)}
+      ${campo('eDes', 'Descripción (opcional)', `<textarea name="descripcion" id="eDes" rows="2">${esc(e.descripcion)}</textarea>`, 'full')}
+      <div class="full" id="eDia"></div>
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" type="submit" id="eGuardar">Guardar</button></div></form>`);
+    const revisar = () => {
+      const f = $('#eFec', body).value, ini = $('#eIni', body).value, fin = $('#eFin', body).value;
+      const ese = S.eventos.filter((x) => x.fecha === f && x.id !== e.id);
+      const c = f && ini && fin && fin > ini ? cruce(f, ini, fin, e.id) : null;
+      const malOrden = ini && fin && fin <= ini;
+      $('#eDia', body).innerHTML = (c ? `<div class="alert" style="margin-bottom:8px">${ico('alert')}<div>Se cruza con <b>${esc(c.titulo)}</b> (${esc(c.hora_inicio)} a ${esc(c.hora_fin)}). Elija otra hora o fecha.</div></div>` : '')
+        + (malOrden ? `<div class="alert" style="margin-bottom:8px">${ico('alert')}<div>La hora de terminación debe ser posterior a la de inicio.</div></div>` : '')
+        + (ese.length ? `<div class="alert info">${ico('calendar')}<div><b>Ya agendado ese día:</b> ${ese.map((x) => `${esc(x.hora_inicio)}–${esc(x.hora_fin)} ${esc(x.titulo)}`).join(' · ')}</div></div>` : '');
+      $('#eGuardar', body).disabled = !!c || !!malOrden;
+    };
+    ['#eFec', '#eIni', '#eFin'].forEach((sel) => $(sel, body).addEventListener('input', revisar));
+    revisar();
+    $('#fEvento', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const datos = leerForm(ev.target);
+      await ocupado(ev.submitter, () => api('guardarEvento', datos));
+      cerrarModal(); toast('Evento guardado.');
+      S.evMes = datos.fecha.slice(0, 7);
+      if (S.vista === 'eventos') vEventos(); else ir('eventos');
+    });
+  }
+
+  // ───────────────────────── Contraseñas ─────────────────────────
+  function formClave(forzado) {
+    const body = abrirModal(forzado ? 'Cree su contraseña personal' : 'Cambiar contraseña', `<form class="form" id="fClave">
+      ${forzado ? '<div class="full alert info">Está usando una contraseña temporal. Escriba una nueva, de al menos 8 caracteres, que solo usted conozca.</div>' : ''}
+      ${campo('kAct', forzado ? 'Contraseña temporal' : 'Contraseña actual', '<input type="password" name="actual" id="kAct" autocomplete="current-password" required>', 'full')}
+      ${campo('kNue', 'Contraseña nueva', '<input type="password" name="nueva" id="kNue" minlength="8" autocomplete="new-password" required>')}
+      ${campo('kCon', 'Repita la contraseña nueva', '<input type="password" name="confirmar" id="kCon" minlength="8" autocomplete="new-password" required>')}
+      <div class="form-actions">${forzado ? '<button type="button" class="btn ghost" data-act="salir">Salir</button>' : '<button type="button" class="btn ghost" data-close>Cancelar</button>'}
+        <button class="btn gold" type="submit">Guardar contraseña</button></div></form>`);
+    if (forzado) $('#modal').classList.add('fijo');
+    $('#fClave', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      await ocupado(ev.submitter, () => api('cambiarClave', leerForm(ev.target)));
+      cerrarModal(true); toast('Contraseña actualizada.');
+      if (forzado) { S.ini.cambiarClave = false; ir('dashboard'); }
+    });
+  }
+
+  function copiar(texto, msg) {
+    const listo = () => toast(msg || 'Copiado.');
+    const viejo = () => {
+      const t = document.createElement('textarea');
+      t.value = texto; document.body.appendChild(t); t.select();
+      try { document.execCommand('copy'); listo(); } catch (e) { prompt('Copie este texto:', texto); }
+      t.remove();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(texto).then(listo, viejo); else viejo();
+  }
+
+  function mostrarClaveTemporal(email, clave) {
+    const enlace = String(S.ini.urlAgenda || '').replace(/\?p=agenda$/, '');
+    const texto = `Ingreso al sistema IPUC ${S.ini.config.NOMBRE_CONGREGACION || ''}\n${enlace}\nUsuario: ${email}\nContraseña temporal: ${clave}`;
+    const body = abrirModal('Contraseña temporal', `<p style="margin-top:0">Entregue estos datos a la persona. La contraseña <b>solo se muestra esta vez</b> y el sistema le pedirá cambiarla al entrar.</p>
+      <div class="summary"><div><span class="muted">Usuario</span><b>${esc(email)}</b></div></div>
+      <div class="clave-temp" style="margin:12px 0">${esc(clave)}</div>
+      <div class="form-actions"><button class="btn ghost" id="ctCopiar">Copiar datos</button><button class="btn gold" data-close>Listo</button></div>`);
+    $('#ctCopiar', body).addEventListener('click', () => copiar(texto, 'Datos de ingreso copiados.'));
+  }
+
+  async function restablecerClave(email, btn) {
+    if (!confirm(`¿Crear una contraseña temporal nueva para ${email}? La anterior dejará de funcionar.`)) return;
+    const r = await ocupado(btn, () => api('restablecerClave', { email }));
+    mostrarClaveTemporal(r.email, r.claveTemporal);
+    if (S.vista === 'usuarios') vUsuarios();
+  }
+
+  // ───────────────────────── Importar miembros desde Excel ─────────────────────────
+  function formImportar() {
+    const body = abrirModal('Importar miembros desde Excel', `<p style="margin-top:0">En su Excel seleccione las columnas <b>Nombre</b>, <b>Sexo</b> (M o F) y <b>Fecha de nacimiento</b>, y si la tiene, <b>Teléfono</b>, en ese orden. Cópielas (Ctrl+C) y péguelas aquí (Ctrl+V).</p>
+      <div class="field"><textarea id="impTxt" rows="9" placeholder="Abner Velázquez Rivera&#9;M&#9;13/05/2001"></textarea></div>
+      <p class="muted" id="impInfo" style="font-size:13.5px">Los nombres que ya existan no se repiten. También puede escribir directamente en la hoja <b>Miembros</b>: el sistema completa el código y el estado.</p>
+      <div id="impErr"></div>
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="impOk" disabled>Importar</button></div>`);
+    const leer = () => $('#impTxt', body).value.split(/\r?\n/).map((l) => l.split('\t').map((c) => c.trim()))
+      .filter((c) => c[0] && !/^nombres?\b/i.test(c[0]));
+    $('#impTxt', body).addEventListener('input', () => {
+      const n = leer().length;
+      $('#impInfo', body).textContent = n ? `${n} fila(s) listas para importar. Los nombres que ya existan no se repiten.` : 'Pegue las filas copiadas del Excel.';
+      $('#impOk', body).disabled = !n;
+    });
+    $('#impOk', body).addEventListener('click', async (ev) => {
+      const r = await ocupado(ev.currentTarget, () => api('importarMiembros', { filas: leer() }));
+      S.miembros = r.miembros;
+      toast(`${r.agregados} miembro(s) agregado(s)${r.repetidos ? `, ${r.repetidos} ya existían` : ''}.`);
+      if (r.errores.length) {
+        $('#impErr', body).innerHTML = `<div class="alert">${ico('alert')}<div><b>No se importaron ${r.errores.length} fila(s):</b><br>${r.errores.slice(0, 15).map(esc).join('<br>')}</div></div>`;
+      } else { cerrarModal(); ir('miembros'); }
+    });
+  }
+
+  // ───────────────────────── Excel: exportar e importar ─────────────────────────
+  // La librería SheetJS se carga solo cuando alguien usa el botón Excel.
+  const XLSX_URL = window.XLSX_SRC || 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  let xlsxCarga = null;
+  function cargarXlsx() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    xlsxCarga = xlsxCarga || new Promise((ok, mal) => {
+      const sc = document.createElement('script');
+      sc.src = XLSX_URL;
+      sc.onload = () => ok(window.XLSX);
+      sc.onerror = () => { xlsxCarga = null; mal(new Error('No se pudo cargar el módulo de Excel. Revise la conexión a internet e intente de nuevo.')); };
+      document.head.appendChild(sc);
+    });
+    return xlsxCarga;
+  }
+
+  // Fechas aaaa-mm-dd se guardan como fecha real de Excel; los números con separador de miles.
+  const serialExcel = (iso) => { const [y, m, d] = iso.split('-').map(Number); return Date.UTC(y, m - 1, d) / 86400000 + 25569; };
+  async function bajarExcel(nombre, hojas) {
+    const X = await cargarXlsx();
+    const wb = X.utils.book_new();
+    const usados = {};
+    hojas.forEach((h) => {
+      const ws = X.utils.aoa_to_sheet(h.filas);
+      h.filas.forEach((fila, r) => fila.forEach((v, c) => {
+        const ref = X.utils.encode_cell({ r, c });
+        if (r > 0 && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) ws[ref] = { t: 'n', v: serialExcel(v), z: 'dd/mm/yyyy' };
+        else if (r > 0 && typeof v === 'number' && Math.abs(v) >= 1000) ws[ref].z = '#,##0';
+      }));
+      ws['!cols'] = (h.filas[0] || []).map((_, c) => ({ wch: Math.min(45, Math.max(10, ...h.filas.slice(0, 200).map((f) => String(f[c] == null ? '' : f[c]).length + 2))) }));
+      let n = String(h.nombre || 'Hoja').replace(/[\[\]:*?/\\]/g, ' ').slice(0, 28) || 'Hoja';
+      while (usados[n.toLowerCase()]) n = n.slice(0, 26) + ' ' + (Object.keys(usados).length + 1);
+      usados[n.toLowerCase()] = true;
+      X.utils.book_append_sheet(wb, ws, n);
+    });
+    descargar(nombre.replace(/[\\/:*?"<>|]/g, '-') + '.xlsx', X.write(wb, { bookType: 'xlsx', type: 'base64' }));
+    toast('Excel descargado: ' + nombre + '.xlsx');
+  }
+
+  const normEnc = (v) => String(v == null ? '' : v).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9%]+/g, ' ').trim();
+  const xFecha = (v) => {
+    if (typeof v === 'number' && v > 59) return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+    const t = String(v == null ? '' : v).trim();
+    let m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+    m = t.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{2,4})$/);
+    if (m) return `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    return t;
+  };
+  const xHora = (v) => {
+    if (typeof v === 'number') { const min = Math.round((v % 1) * 1440) % 1440; return `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`; }
+    const m = String(v == null ? '' : v).trim().toLowerCase().replace(/\./g, '').replace(/\s+/g, ' ').match(/^(\d{1,2})(?::(\d{2}))?(?::\d{2})?\s*(am|pm|a m|p m)?$/);
+    if (!m) return String(v == null ? '' : v).trim();
+    let h = Number(m[1]); const ap = (m[3] || '').replace(' ', '');
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    return `${String(h).padStart(2, '0')}:${m[2] || '00'}`;
+  };
+  const xNum = (v) => (typeof v === 'number' ? Math.round(v) : Number(String(v == null ? '' : v).replace(/[^\d-]/g, '')) || 0);
+  const xTxt = (v) => String(v == null ? '' : v).trim();
+  const xSi = (v) => v === true || /^(si|sí|s|x|1|true|verdadero)$/i.test(xTxt(v));
+
+  /** Busca la fila de encabezados (en las primeras 10) y devuelve objetos con los campos del mapa. */
+  function filasPorEncabezado(filas, mapa) {
+    for (let r = 0; r < Math.min(10, filas.length); r++) {
+      const enc = filas[r].map(normEnc), idx = {};
+      Object.entries(mapa).forEach(([k, alias]) => { const i = enc.findIndex((h) => alias.includes(h)); if (i >= 0) idx[k] = i; });
+      if (Object.keys(idx).length >= Math.min(2, Object.keys(mapa).length)) {
+        return filas.slice(r + 1).map((f, j) => {
+          const o = { fila: r + j + 2 };
+          Object.entries(idx).forEach(([k, i]) => { o[k] = f[i]; });
+          return o;
+        }).filter((o) => Object.keys(o).some((k) => k !== 'fila' && xTxt(o[k]) !== ''));
+      }
+    }
+    return null;
+  }
+
+  async function leerLibro(file) {
+    const X = await cargarXlsx();
+    const wb = X.read(await file.arrayBuffer(), { type: 'array' });
+    const hoja = (nombre) => X.utils.sheet_to_json(wb.Sheets[nombre || wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
+    return { nombres: wb.SheetNames, hoja };
+  }
+
+  /** Ventana genérica de importación: elegir archivo, ver cuántas filas se leyeron e importar. */
+  function formImportarExcel(o) {
+    const body = abrirModal(o.titulo, `<p style="margin-top:0">${o.ayuda}</p>
+      <div class="field"><input type="file" id="xFile" accept=".xlsx,.xls,.csv"></div>
+      <p class="muted" style="font-size:13.5px;margin:8px 0" id="xInfo">${o.nota || 'Consejo: descargue primero el Excel de esta sección y úselo como plantilla.'}</p>
+      <div id="xPrev"></div><div id="xErr"></div>
+      <div class="form-actions">${o.extra || ''}<button type="button" class="btn ghost" id="xPlant">${ico('xls')} Descargar plantilla</button><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="xOk" disabled>Importar</button></div>`);
+    let filas = [];
+    $('#xPlant', body).addEventListener('click', (ev) => ocupado(ev.currentTarget, () => o.plantilla()).catch(() => {}));
+    if (o.alAbrir) o.alAbrir(body);
+    $('#xFile', body).addEventListener('change', async (ev) => {
+      const f = ev.target.files[0];
+      $('#xErr', body).innerHTML = ''; $('#xPrev', body).innerHTML = ''; $('#xOk', body).disabled = true;
+      if (!f) return;
+      try {
+        filas = await o.leer(await leerLibro(f));
+      } catch (e) {
+        $('#xErr', body).innerHTML = `<div class="alert">${ico('alert')}<div>${esc(e.message)}</div></div>`; return;
+      }
+      $('#xInfo', body).textContent = `${filas.length} fila(s) leídas de "${f.name}".`;
+      if (o.vista && filas.length) {
+        const v = filas.slice(0, 5).map(o.vista);
+        $('#xPrev', body).innerHTML = `<div class="table-wrap"><table><tbody>${v.map((cel) => `<tr>${cel.map((c) => `<td style="font-size:13px">${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>${filas.length > 5 ? `<p class="muted" style="font-size:12.5px">… y ${filas.length - 5} más.</p>` : ''}`;
+      }
+      $('#xOk', body).disabled = !filas.length;
+    });
+    $('#xOk', body).addEventListener('click', async (ev) => {
+      let r;
+      try { r = await ocupado(ev.currentTarget, () => o.enviar(filas)); } catch (e) { return; }
+      toast(r.mensaje);
+      if (r.errores && r.errores.length) {
+        $('#xOk', body).disabled = true;
+        $('#xErr', body).innerHTML = `<div class="alert">${ico('alert')}<div><b>${r.mensaje}</b><br>No se importaron ${r.errores.length} fila(s):<br>${r.errores.slice(0, 20).map(esc).join('<br>')}${r.errores.length > 20 ? '<br>…' : ''}</div></div>`;
+      } else cerrarModal();
+      if (o.despues) o.despues();
+    });
+  }
+
+  const exigir = (filas, encabezados) => {
+    if (!filas) throw new Error('No se encontraron los encabezados en el archivo. La primera fila debe tener: ' + encabezados + '.');
+    return filas;
+  };
+  const hoyArchivo = () => S.ini.hoy;
+
+  // ── Por sección ──
+  const ENC_MIEMBROS = ['Nombre', 'Sexo (M/F)', 'Fecha de nacimiento', 'Teléfono', 'Correo', 'Dirección', 'Estado', 'Edad'];
+  const ENC_EVENTOS = ['Nombre del evento', 'Fecha', 'Hora de inicio', 'Hora de terminación', 'Lugar', 'Responsable', 'Descripción', 'Comité', 'Agendado por', 'Estado'];
+  const encMovs = (ing) => ['Número', 'Fecha', 'Categoría', ing ? 'Recibido en' : 'Pagado con', 'Valor', 'Concepto', ...(ing ? [] : ['Pagado a', 'Documento / NIT']), 'Referencia Nequi', 'Estado', 'Registrado por'];
+
+  async function filasEventos() {
+    const evs = await api('listarEventos', {});
+    return [ENC_EVENTOS, ...evs.map((e) => [e.titulo, e.fecha, e.hora_inicio, e.hora_fin, e.lugar, e.responsable, e.descripcion, e.comite || '', e.creado_por, e.estado])];
+  }
+
+  /** Informe semanal en un formato que se puede volver a importar (columna Clave). */
+  function filasSemana() {
+    const d = S.semDatos, c = calcSemana(d, S.sem.calculo.porcentajes, S.sem.billetes);
+    const f = [['Clave (no modificar)', 'Sección', 'Concepto', 'Valor', 'Fecha', '¿Se realizó?', 'Promedio']];
+    f.push(['semana', 'Semana', `Del ${fechaCorta(S.sem.lunes)} al ${fechaCorta(S.sem.domingo)}`, '', S.sem.domingo, '', '']);
+    S.sem.billetes.forEach((b) => f.push([`conteo.${b}`, 'Conteo de billetes (cantidad)', 'Billetes de ' + pesos(b), Number(d.conteo[b]) || 0, '', '', '']));
+    f.push(['conteo.monedas', 'Conteo de billetes', 'Monedas (valor)', Number(d.conteo.monedas) || 0, '', '', '']);
+    f.push(['conteo.nequi', 'Conteo de billetes', 'Nequi (valor)', Number(d.conteo.nequi) || 0, '', '', '']);
+    f.push(['diezmos.noche', 'Informe de diezmos', 'Noche', Number(d.diezmos.noche) || 0, '', '', '']);
+    f.push(['diezmos.sobres', 'Informe de diezmos', 'Sobres', Number(d.diezmos.sobres) || 0, '', '', '']);
+    d.cultos.forEach((x, i) => f.push([`cultos.${i}`, 'Cultos semanales', x.nombre || '', Number(x.ofrenda) || 0, x.fecha || '', x.realizado ? 'Sí' : 'No', x.promedio || '']));
+    d.sectores.forEach((x, i) => f.push([`sectores.${i}`, 'Cultos en los sectores', x.nombre || '', Number(x.ofrenda) || 0, x.fecha || '', '', '']));
+    d.egresos.forEach((x, i) => f.push([`egresos.${i}`, 'Egresos', x.detalle || '', Number(x.valor) || 0, '', '', '']));
+    f.push(['observaciones', 'Observaciones', 'Observaciones', d.observaciones || '', '', '', '']);
+    const p = c.porcentajes || S.sem.calculo.porcentajes;
+    const r = [['Concepto', 'Valor'], ['Semana', `${fechaCorta(S.sem.lunes)} al ${fechaCorta(S.sem.domingo)}`], ['Estado', S.sem.estado],
+      ['Diezmos del día (conteo)', c.dia.diezmos], ['Diezmos noche', c.noche.diezmos], ['Diezmos sobres', c.sobres.diezmos], ['Total diezmos', c.total.diezmos],
+      [p[0] + '%', c.total.a1], [p[1] + '%', c.total.a2], [p[2] + '%', c.total.a3], ['Total suma de aportes', c.totalAportes], ['Neto diezmos', c.total.neto], ['Neto menos Nequi', c.netoMenosNequi],
+      ['Subtotal ofrendas de cultos', c.subtotalOfrendas], ['(−) Egresos', c.totalEgresos], ['Total ofrendas', c.totalOfrendas], ['Cultos en sectores', c.totalSectores],
+      ['TOTAL GENERAL', c.totalGeneral], ['Valor en letras', c.letras]];
+    return [{ nombre: 'Informe', filas: f }, { nombre: 'Resumen', filas: r }];
+  }
+
+  function leerSemanaExcel(libro) {
+    const nombre = libro.nombres.find((n) => normEnc(n) === 'informe') || libro.nombres[0];
+    const filas = libro.hoja(nombre);
+    const enc = (filas[0] || []).map(normEnc);
+    const col = (alias) => enc.findIndex((h) => alias.includes(h));
+    const k = col(['clave no modificar', 'clave']), val = col(['valor']), fec = col(['fecha']), rea = col(['se realizo']), pro = col(['promedio']), con = col(['concepto']);
+    if (k < 0 || val < 0) throw new Error('Use el Excel descargado de esta sección: debe tener las columnas "Clave" y "Valor".');
+    return filas.slice(1).filter((f) => xTxt(f[k])).map((f) => ({ clave: xTxt(f[k]), concepto: con >= 0 ? f[con] : '', valor: f[val], fecha: fec >= 0 ? f[fec] : '', realizado: rea >= 0 ? f[rea] : '', promedio: pro >= 0 ? f[pro] : '' }));
+  }
+
+  /** Convierte las filas del Excel en los campos del informe que cambiaron. */
+  function cambiosSemana(filas, datos) {
+    const cambios = {};
+    const poner = (ruta, v) => { if (String(leerRuta(datos, ruta) == null ? '' : leerRuta(datos, ruta)) !== String(v)) cambios[ruta] = v; };
+    let domingo = '';
+    filas.forEach((f) => {
+      const m = f.clave.match(/^(cultos|sectores|egresos)\.(\d+)$/);
+      if (f.clave === 'semana') domingo = xFecha(f.fecha);
+      else if (/^conteo\.|^diezmos\./.test(f.clave)) { if (leerRuta(datos, f.clave) !== undefined) poner(f.clave, xNum(f.valor)); }
+      else if (f.clave === 'observaciones') poner('observaciones', xTxt(f.valor));
+      else if (m && datos[m[1]][Number(m[2])]) {
+        const i = Number(m[2]), base = `${m[1]}.${i}`, lista = datos[m[1]];
+        if (m[1] === 'egresos') { poner(base + '.detalle', xTxt(f.concepto)); poner(base + '.valor', xNum(f.valor)); return; }
+        if (i >= lista.length - 3) poner(base + '.nombre', xTxt(f.concepto));
+        poner(base + '.ofrenda', xNum(f.valor));
+        poner(base + '.fecha', xTxt(f.fecha) ? xFecha(f.fecha) : '');
+        if (m[1] === 'cultos') { poner(base + '.realizado', xSi(f.realizado)); poner(base + '.promedio', xNum(f.promedio) || ''); }
+      }
+    });
+    return { domingo, cambios };
+  }
+
+  const EXCEL = {
+    semana: {
+      exportar: () => bajarExcel(`Informe semanal ${S.sem.domingo}`, filasSemana()),
+      puedeImportar: () => S.sem && S.sem.estado !== 'CERRADA' && puede('semana.editar'),
+      importar: () => formImportarExcel({
+        titulo: 'Importar informe semanal',
+        ayuda: 'Descargue el Excel de la semana, llene la columna <b>Valor</b> (y Fecha, ¿Se realizó? y Promedio en los cultos) y súbalo aquí. No cambie la columna <b>Clave</b>.',
+        nota: 'Solo se guardan los campos que cambiaron, así no se borra lo que otros ya ingresaron.',
+        plantilla: () => bajarExcel(`Informe semanal ${S.sem.domingo}`, filasSemana()),
+        leer: leerSemanaExcel,
+        vista: (f) => [f.concepto || f.clave, typeof f.valor === 'number' ? pesos(f.valor) : f.valor],
+        enviar: async (filas) => {
+          let dom = S.sem.domingo, datos = S.semDatos;
+          const sem = cambiosSemana(filas, datos);
+          if (sem.domingo && domingoCliente(sem.domingo) !== S.sem.domingo) {
+            dom = domingoCliente(sem.domingo);
+            const otra = await api('obtenerSemana', { fecha: dom });
+            if (otra.estado === 'CERRADA') throw new Error(`El archivo es de la semana del ${fechaCorta(otra.lunes)} al ${fechaCorta(otra.domingo)}, que ya está cerrada.`);
+            datos = otra.datos;
+          }
+          const { cambios } = cambiosSemana(filas, datos);
+          const n = Object.keys(cambios).length;
+          if (!n) return { mensaje: 'El archivo no trae cambios para esta semana.' };
+          S.semCambios = {};
+          await api('guardarSemana', { domingo: dom, cambios });
+          S.semFecha = dom;
+          return { mensaje: `${n} campo(s) importados en la semana del ${fechaCorta(dom)}.` };
+        },
+        despues: () => vSemana(S.semFecha),
+      }),
+    },
+    eventos: {
+      exportar: async () => bajarExcel('Eventos ' + hoyArchivo(), [{ nombre: 'Eventos', filas: await filasEventos() }]),
+      puedeImportar: () => puede('eventos.crear'),
+      importar: () => formImportarExcel({
+        titulo: 'Importar eventos desde Excel',
+        ayuda: 'Columnas: <b>Nombre del evento</b>, <b>Fecha</b>, <b>Hora de inicio</b> y <b>Hora de terminación</b>; opcionales Lugar, Responsable y Descripción. Cada evento se revisa igual que uno nuevo: no se permiten cruces de horario ni fechas pasadas.',
+        plantilla: async () => bajarExcel('Eventos ' + hoyArchivo(), [{ nombre: 'Eventos', filas: await filasEventos() }]),
+        leer: (libro) => exigir(filasPorEncabezado(libro.hoja(), {
+          titulo: ['nombre del evento', 'evento', 'nombre', 'titulo'], fecha: ['fecha'],
+          hora_inicio: ['hora de inicio', 'hora inicio', 'inicio', 'desde'], hora_fin: ['hora de terminacion', 'hora de fin', 'hora fin', 'fin', 'hasta', 'terminacion'],
+          lugar: ['lugar'], responsable: ['responsable'], descripcion: ['descripcion', 'detalle'], estado: ['estado'],
+        }), 'Nombre del evento, Fecha, Hora de inicio, Hora de terminación').filter((f) => !/cancel/i.test(xTxt(f.estado)))
+          .map((f) => ({ fila: f.fila, titulo: xTxt(f.titulo), fecha: xFecha(f.fecha), hora_inicio: xHora(f.hora_inicio), hora_fin: xHora(f.hora_fin), lugar: xTxt(f.lugar), responsable: xTxt(f.responsable), descripcion: xTxt(f.descripcion) })),
+        vista: (f) => [f.titulo, f.fecha, `${f.hora_inicio} a ${f.hora_fin}`, f.lugar],
+        enviar: async (filas) => {
+          // Los eventos que ya están en la agenda (mismo nombre, fecha y hora) no se repiten.
+          const ya = new Set((await api('listarEventos', {})).map((e) => normEnc(e.titulo) + '|' + e.fecha + '|' + e.hora_inicio));
+          const nuevas = filas.filter((f) => !ya.has(normEnc(f.titulo) + '|' + f.fecha + '|' + f.hora_inicio));
+          const r = nuevas.length ? await api('importarEventos', { filas: nuevas }) : { agregados: 0, errores: [] };
+          const rep = filas.length - nuevas.length;
+          return { errores: r.errores, mensaje: `${r.agregados} evento(s) agregado(s)${rep ? `, ${rep} ya estaban en la agenda` : ''}.` };
+        },
+        despues: () => vEventos(),
+      }),
+    },
+    miembros: {
+      exportar: () => bajarExcel('Miembros ' + hoyArchivo(), [{ nombre: 'Miembros', filas: [ENC_MIEMBROS, ...(S.miembros || []).map((m) => [m.nombre, m.genero === 'Masculino' ? 'M' : m.genero === 'Femenino' ? 'F' : '', m.fecha_nacimiento || '', m.telefono || '', m.email || '', m.direccion || '', m.estado, edad(m.fecha_nacimiento) === '—' ? '' : edad(m.fecha_nacimiento)])] }]),
+      puedeImportar: () => puede('miembros.editar'),
+      importar: () => formImportarExcel({
+        titulo: 'Importar miembros desde Excel',
+        ayuda: 'Columnas: <b>Nombre</b> y <b>Sexo</b> (M o F); opcionales Fecha de nacimiento, Teléfono, Correo, Dirección y Estado. Los nombres que ya existan no se repiten.',
+        extra: '<button type="button" class="btn ghost" data-act="importarMiembros">Pegar filas</button>',
+        plantilla: () => bajarExcel('Miembros ' + hoyArchivo(), [{ nombre: 'Miembros', filas: [ENC_MIEMBROS, ...(S.miembros || []).map((m) => [m.nombre, m.genero === 'Masculino' ? 'M' : m.genero === 'Femenino' ? 'F' : '', m.fecha_nacimiento || '', m.telefono || '', m.email || '', m.direccion || '', m.estado, ''])] }]),
+        leer: (libro) => exigir(filasPorEncabezado(libro.hoja(), {
+          nombre: ['nombre', 'nombres', 'nombre completo', 'nombres y apellidos'], sexo: ['sexo m f', 'sexo', 'genero'],
+          nac: ['fecha de nacimiento', 'fecha nacimiento', 'nacimiento', 'fecha'], tel: ['telefono', 'celular', 'tel'],
+          email: ['correo', 'email', 'e mail', 'correo electronico'], dir: ['direccion'], estado: ['estado'],
+        }), 'Nombre, Sexo'),
+        vista: (f) => [xTxt(f.nombre), xTxt(f.sexo), xFecha(f.nac), xTxt(f.tel)],
+        enviar: async (filas) => {
+          const r = await api('importarMiembros', { filas: filas.map((f) => [xTxt(f.nombre), xTxt(f.sexo), xFecha(f.nac), xTxt(f.tel), xTxt(f.email), xTxt(f.dir), xTxt(f.estado)]) });
+          S.miembros = r.miembros;
+          return { errores: r.errores, mensaje: `${r.agregados} miembro(s) agregado(s)${r.repetidos ? `, ${r.repetidos} ya existían` : ''}.` };
+        },
+        despues: () => ir('miembros'),
+      }),
+    },
+    ingresos: excelMovs('INGRESO'),
+    gastos: excelMovs('EGRESO'),
+    presupuesto: {
+      exportar: () => bajarExcel('Presupuesto ' + S.ppto.anio, [{ nombre: 'Presupuesto ' + S.ppto.anio, filas: filasPpto() }]),
+      puedeImportar: () => puede('presupuesto.editar'),
+      importar: () => formImportarExcel({
+        titulo: 'Importar presupuesto ' + S.ppto.anio,
+        ayuda: 'Columnas: <b>Tipo</b> (Ingreso o Gasto), <b>Categoría</b> y <b>Presupuesto anual</b>. Las categorías que no estén en el archivo conservan su valor.',
+        plantilla: () => bajarExcel('Presupuesto ' + S.ppto.anio, [{ nombre: 'Presupuesto ' + S.ppto.anio, filas: filasPpto() }]),
+        leer: (libro) => exigir(filasPorEncabezado(libro.hoja(), { tipo: ['tipo'], categoria: ['categoria'], valor: ['presupuesto anual', 'presupuesto', 'valor'] }), 'Tipo, Categoría, Presupuesto anual'),
+        vista: (f) => [xTxt(f.tipo), xTxt(f.categoria), pesos(xNum(f.valor))],
+        enviar: async (filas) => {
+          const valores = {}, errores = [];
+          S.ppto.filas.forEach((f) => { valores[f.tipo + '|' + f.categoria] = Number(f.presupuesto) || 0; });
+          let n = 0;
+          filas.forEach((f) => {
+            const tipo = /^(gasto|egreso)/i.test(normEnc(f.tipo)) ? 'EGRESO' : 'INGRESO';
+            const cat = S.ppto.filas.find((x) => x.tipo === tipo && normEnc(x.categoria) === normEnc(f.categoria));
+            if (!cat) { errores.push(`Fila ${f.fila}: la categoría "${xTxt(f.categoria)}" no existe en ${tipo === 'EGRESO' ? 'gastos' : 'ingresos'}.`); return; }
+            valores[tipo + '|' + cat.categoria] = xNum(f.valor); n++;
+          });
+          if (n) await api('guardarPresupuesto', { anio: S.ppto.anio, valores });
+          return { errores, mensaje: `${n} categoría(s) actualizadas en el presupuesto ${S.ppto.anio}.` };
+        },
+        despues: () => vPresupuesto(),
+      }),
+    },
+    reportes: { exportar: () => bajarExcel(`Resumen ${S.rep[0]} a ${S.rep[1]}`, filasResumen()) },
+    caja: { exportar: () => bajarExcel('Caja diaria ' + hoyArchivo(), tablasVista()) },
+    nequi: { exportar: () => bajarExcel('Nequi ' + hoyArchivo(), tablasVista()) },
+    auditoria: { exportar: () => bajarExcel('Auditoria ' + hoyArchivo(), tablasVista()) },
+  };
+
+  function excelMovs(tipo) {
+    const ing = tipo === 'INGRESO', nombre = () => `${ing ? 'Ingresos' : 'Gastos'} ${S.filtro.desde} a ${S.filtro.hasta}`;
+    const filas = () => [encMovs(ing), ...(S.movs || []).map((m) => [m.numero, m.fecha, m.categoria, m.medio_pago, Number(m.valor), m.concepto, ...(ing ? [] : [m.tercero, m.tercero_doc]), m.referencia, m.estado, m.registrado_por])];
+    return {
+      exportar: () => bajarExcel(nombre(), [{ nombre: ing ? 'Ingresos' : 'Gastos', filas: filas() }]),
+      puedeImportar: () => puede('movimientos.crear'),
+      importar: () => formImportarExcel({
+        titulo: ing ? 'Importar ingresos desde Excel' : 'Importar gastos desde Excel',
+        ayuda: `Columnas: <b>Fecha</b>, <b>Categoría</b>, <b>Valor</b> y <b>${ing ? 'Recibido en' : 'Pagado con'}</b> (Efectivo o Nequi)${ing ? '' : ', <b>Concepto</b> y <b>Pagado a</b>'}. Cada fila se revisa como un registro manual: categoría existente, caja del día abierta${ing ? '' : ' y saldo suficiente'}. Las filas con número (RI-/CE-) ya registradas no se repiten.`,
+        plantilla: () => bajarExcel(nombre(), [{ nombre: ing ? 'Ingresos' : 'Gastos', filas: filas() }]),
+        leer: (libro) => exigir(filasPorEncabezado(libro.hoja(), {
+          numero: ['numero', 'n', 'no'], fecha: ['fecha'], categoria: ['categoria'], medio_pago: ['recibido en', 'pagado con', 'medio de pago', 'medio'],
+          valor: ['valor', 'monto', 'valor cop'], concepto: ['concepto', 'detalle'], tercero: ['pagado a', 'beneficiario', 'tercero'],
+          tercero_doc: ['documento nit', 'documento', 'nit'], referencia: ['referencia nequi', 'referencia'], estado: ['estado'],
+        }), 'Fecha, Categoría, Valor').filter((f) => !/anulad/i.test(xTxt(f.estado)))
+          .map((f) => ({ fila: f.fila, numero: xTxt(f.numero), fecha: xFecha(f.fecha), categoria: xTxt(f.categoria), medio_pago: xTxt(f.medio_pago) || 'Efectivo', valor: xNum(f.valor), concepto: xTxt(f.concepto), tercero: xTxt(f.tercero), tercero_doc: xTxt(f.tercero_doc), referencia: xTxt(f.referencia) })),
+        vista: (f) => [f.fecha, f.categoria, f.medio_pago, pesos(f.valor), f.concepto],
+        enviar: async (filas) => {
+          const r = await api('importarMovimientos', { tipo, filas });
+          return { errores: r.errores, mensaje: `${r.agregados} registro(s) agregado(s)${r.repetidos ? `, ${r.repetidos} ya estaban registrados` : ''}.` };
+        },
+        despues: () => cargarMovs(),
+      }),
+    };
+  }
+
+  function filasPpto() {
+    const p = S.ppto;
+    return [['Tipo', 'Categoría', 'Presupuesto anual', 'Ejecutado', 'Avance %'], ...p.filas.map((f) => [f.tipo === 'EGRESO' ? 'Gasto' : 'Ingreso', f.categoria, Number(f.presupuesto) || 0, Number(f.ejecutado) || 0, f.presupuesto ? Math.round(f.ejecutado * 100 / f.presupuesto) : ''])];
+  }
+
+  function filasResumen() {
+    const r = S.resumen;
+    return [
+      { nombre: 'Resumen', filas: [['Concepto', 'Valor'], ['Desde', S.rep[0]], ['Hasta', S.rep[1]], ['Ingresos', r.totalIngresos], ['Gastos', r.totalEgresos], ['Resultado', r.resultado],
+        ['Saldo inicial caja', r.saldoInicial.CAJA], ['Saldo inicial Nequi', r.saldoInicial.NEQUI], ['Saldo final caja', r.saldoFinal.CAJA], ['Saldo final Nequi', r.saldoFinal.NEQUI]] },
+      { nombre: 'Ingresos por categoría', filas: [['Categoría', 'Valor'], ...r.ingresos.map((x) => [x.categoria, x.valor])] },
+      { nombre: 'Gastos por categoría', filas: [['Categoría', 'Valor'], ...r.egresos.map((x) => [x.categoria, x.valor])] },
+    ];
+  }
+
+  /** Exporta las tablas que se ven en pantalla (sin columnas de botones). */
+  function tablasVista() {
+    const hojas = $$('#view table').map((t, i) => {
+      const filas = $$('tr', t).map((tr) => $$('th,td', tr).map((cel) => {
+        const inp = cel.querySelector('input:not([type=checkbox]),select');
+        const v = (inp ? inp.value : (cel.innerText || cel.textContent)).split(/\n+/).map((x) => x.trim()).filter(Boolean).join(' · ').replace(/\s+/g, ' ').trim();
+        return /^-?\$ ?[\d.]+$/.test(v) ? Number(v.replace(/[^\d-]/g, '')) : v;
+      }));
+      const enc = filas[0] || [];
+      const cols = enc.map((h, c) => c).filter((c) => xTxt(enc[c]) !== '');
+      const card = t.closest('.card');
+      const titulo = (card && card.querySelector('.card-head h3') ? card.querySelector('.card-head h3').textContent : '') || ($('#pageTitle').textContent + (i ? ' ' + (i + 1) : ''));
+      return { nombre: titulo, filas: filas.map((f) => cols.map((c) => (f[c] === undefined ? '' : f[c]))) };
+    }).filter((h) => h.filas.length > 1);
+    if (!hojas.length) throw new Error('No hay tablas para exportar en esta pantalla.');
+    return hojas;
+  }
+
+  function botonExcel() {
+    return EXCEL[S.vista] ? `<button class="btn ghost" data-act="excel" title="Exportar o importar con Excel">${ico('xls')}<span>Excel</span></button>` : '';
+  }
+
+  function menuExcel() {
+    const x = EXCEL[S.vista];
+    if (!x) return;
+    const imp = x.importar && x.puedeImportar && x.puedeImportar();
+    const body = abrirModal('Excel', `<p style="margin-top:0">Descargue la información de <b>${esc($('#pageTitle').textContent)}</b> en un archivo de Excel${imp ? ', o suba un archivo para agregar o completar datos' : ''}.</p>
+      <div class="xls-ops"><button class="btn gold" id="xExp">${ico('xls')}<span>Exportar a Excel</span></button>${imp ? `<button class="btn" id="xImp">${ico('in')}<span>Importar desde Excel</span></button>` : ''}</div>
+      ${x.importar && !imp ? '<p class="muted" style="font-size:13px">Su rol no permite importar en esta sección' + (S.vista === 'semana' ? ', o la semana ya está cerrada' : '') + '.</p>' : ''}`);
+    $('#xExp', body).addEventListener('click', (ev) => ocupado(ev.currentTarget, () => x.exportar()).then(cerrarModal, () => {}));
+    if (imp) $('#xImp', body).addEventListener('click', () => x.importar());
+  }
+
+  // ───────────────────────── Cultos y sectores del informe semanal ─────────────────────────
+  const listaCfg = (k) => String((S.ini.config || {})[k] || '').split(',').map((x) => x.trim()).filter(Boolean);
+
+  function formLista(clave) {
+    const titulo = clave === 'SECTORES' ? 'Sectores (cultos en los barrios)' : 'Cultos semanales';
+    const fila = (n) => `<div><input data-anterior="${esc(n)}" value="${esc(n)}" placeholder="Nombre"><button type="button" class="btn ghost sm" data-quitar title="Quitar">✕</button></div>`;
+    const body = abrirModal(titulo, `<p class="muted" style="margin-top:0">Cambie los nombres, agregue o quite filas. Al renombrar, la categoría de ingreso y las semanas abiertas toman el nombre nuevo; las semanas ya cerradas conservan el nombre con que se cerraron.</p>
+      <div class="lista-edit" id="lEdit">${listaCfg(clave).map(fila).join('')}</div>
+      <button type="button" class="btn ghost sm" id="lAdd" style="margin-top:10px">${ico('plus')} Agregar</button>
+      <div class="form-actions" style="margin-top:16px"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" id="lGuardar">Guardar</button></div>`);
+    $('#lEdit', body).addEventListener('click', (ev) => { const q = ev.target.closest('[data-quitar]'); if (q) q.parentElement.remove(); });
+    $('#lAdd', body).addEventListener('click', () => {
+      $('#lEdit', body).insertAdjacentHTML('beforeend', fila(''));
+      const ins = $$('#lEdit input', body); ins[ins.length - 1].focus();
+    });
+    $('#lGuardar', body).addEventListener('click', async (ev) => {
+      const items = $$('#lEdit input', body).map((i) => ({ anterior: i.dataset.anterior, nombre: i.value }));
+      S.ini.config = await ocupado(ev.currentTarget, () => api('guardarListaSemana', { clave, items }));
+      S.ini.categorias = (await api('init')).categorias;
+      cerrarModal(); toast('Lista actualizada.');
+      if (S.vista === 'semana') vSemana(S.sem && S.sem.domingo); else if (S.vista === 'config') vConfig();
+    });
+  }
+
+  // ───────────────────────── Enlace público de eventos (?p=agenda) ─────────────────────────
+  const evtItem = (e, extra) => {
+    const p = e.fecha.split('-');
+    return `<div class="evt"><div class="evt-fecha"><b>${Number(p[2])}</b><small>${MESES[Number(p[1]) - 1]}</small></div>
+      <div class="evt-txt"><b>${esc(e.titulo)}</b><span>${esc(e.hora_inicio)} a ${esc(e.hora_fin)}${e.lugar ? ' · ' + esc(e.lugar) : ''}${e.comite ? ' · ' + esc(e.comite) : ''}</span>${extra || ''}</div></div>`;
+  };
+
+  async function iniciarAgenda(msg) {
+    const pub = await datosPublicos();
+    S.token = '';
+    if (msg) S.ag = { token: '' };
+    S.ag = S.ag || { token: guardado.get('ipuc_ag') };
+    if (S.ag.token && !msg) {
+      try { return pintarAgenda(await api('agendaEventos', { token: S.ag.token })); } catch (e) { if (e.silencioso) return; }
+    }
+    $('#agenda').hidden = true;
+    $('#login').hidden = false;
+    $('#login').innerHTML = `<div style="width:min(440px,100%)"><div class="login-card">
+      <div class="login-head"><div id="loginLogo"></div><small>${esc(pub.iglesia)}</small><h1>${esc(pub.congregacion)}</h1></div>
+      <form class="login-body" id="fAgIn">
+        <div style="text-align:center"><b style="color:var(--azul);font-size:17px">Agenda de eventos de los comités</b>
+          <div class="muted" style="font-size:14px">Escriba su nombre y elija el comité que representa.</div></div>
+        ${msg ? `<div class="alert info">${esc(msg)}</div>` : ''}
+        ${campo('agNom', 'Nombre completo', '<input name="nombre" id="agNom" autocomplete="name" required>')}
+        ${campo('agCom', 'Comité que representa', `<select name="comite" id="agCom" required><option value="">Seleccione…</option>${opciones(pub.comites)}</select>`)}
+        <button class="btn gold" type="submit">Entrar</button>
+      </form>
+      <div class="login-foot">Personal de la iglesia: <a href="${esc(pub.url)}" target="_top">ingresar al sistema</a></div></div>
+      <div class="login-lema">“${esc(pub.lema)}”</div></div>`;
+    pintarLogo($('#loginLogo'), pub);
+    $('#fAgIn').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      let r; try { r = await ocupado(ev.submitter, () => api('agendaEntrar', leerForm(ev.target))); } catch (e) { return; }
+      S.ag = r; guardado.set('ipuc_ag', r.token);
+      pintarAgenda(await api('agendaEventos', { token: r.token }));
+    });
+  }
+
+  function pintarAgenda(dat) {
+    S.agDat = dat;
+    const pub = S.pub;
+    $('#login').hidden = true; $('#agenda').hidden = false;
+    const estado = (e) => e.estado === 'Cancelado' ? `<span class="badge b-bad">Cancelado${e.motivo ? ': ' + esc(e.motivo) : ''}</span>`
+      : e.fecha < pub.hoy ? '<span class="badge b-tr">Realizado</span>' : '<span class="badge b-ok">Programado</span>';
+    $('#agenda').innerHTML = `<header class="appbar"><div class="brand"><div class="brand-logo" id="agLogo"></div>
+        <div class="brand-text"><small>${esc(pub.iglesia)}</small><strong>${esc(pub.congregacion)}</strong></div></div>
+        <div class="appbar-right"><span class="appbar-date">${esc(dat.nombre)} · ${esc(dat.comite)}</span>
+          <button class="btn sm" style="background:rgba(255,255,255,.14)" id="agSalir">Salir</button></div></header>
+      <div class="agenda-main">
+        <div class="topbar-title" style="padding:0"><h1>Agenda de eventos</h1><span class="muted">${esc(dat.nombre)} · Comité ${esc(dat.comite)}. Dos eventos no pueden quedar a la misma hora el mismo día.</span></div>
+        <div class="grid g-21">
+          <div class="card"><div class="card-head"><h3>Registrar un evento</h3></div><form class="form" id="fAg">
+            ${campo('aTit', 'Nombre del evento', '<input name="titulo" id="aTit" required placeholder="Ej.: Reunión del comité">', 'full')}
+            ${campo('aFec', 'Fecha', `<input type="date" name="fecha" id="aFec" min="${pub.hoy}" required>`, 'full')}
+            ${campo('aIni', 'Hora de inicio', '<input type="time" name="hora_inicio" id="aIni" required>')}
+            ${campo('aFin', 'Hora de terminación', '<input type="time" name="hora_fin" id="aFin" required>')}
+            ${campo('aLug', 'Lugar', '<input name="lugar" id="aLug" value="Templo">', 'full')}
+            ${campo('aDes', 'Descripción (opcional)', '<textarea name="descripcion" id="aDes" rows="2"></textarea>', 'full')}
+            <div class="full" id="aDia"></div>
+            <div class="form-actions"><button class="btn gold" type="submit" id="aGuardar">Registrar evento</button></div></form></div>
+          <div class="card" style="align-self:start"><div class="card-head"><h3>Mis eventos</h3></div>
+            ${dat.mios.length ? `<div class="lista-evt">${dat.mios.map((e) => evtItem(e, `<div style="margin-top:3px">${estado(e)}</div>`)).join('')}</div>` : '<div class="empty">Todavía no ha registrado eventos.</div>'}</div>
+        </div>
+        <div class="card"><div class="card-head"><h3>Próximos eventos de la iglesia</h3><span class="muted" style="font-size:13px">Revise los horarios ocupados antes de registrar</span></div>
+          ${dat.eventos.length ? `<div class="grid g-3">${dat.eventos.map((e) => evtItem(e)).join('')}</div>` : '<div class="empty">No hay eventos próximos.</div>'}</div>
+        <div class="pie" style="padding:8px 0 0"><b>IPUC ${esc(pub.congregacion)}</b><span>${esc(pub.direccion)}</span>${pub.email ? `<span>${esc(pub.email)}</span>` : ''}<span>${esc(pub.web)}</span><em>“${esc(pub.lema)}”</em></div>
+      </div>`;
+    pintarLogo($('#agLogo'), pub);
+    const f = $('#fAg');
+    const revisar = () => {
+      const fe = $('#aFec').value, ini = $('#aIni').value, fin = $('#aFin').value;
+      const ese = dat.eventos.filter((x) => x.fecha === fe);
+      const c = fe && ini && fin && fin > ini ? ese.find((x) => x.hora_inicio < fin && ini < x.hora_fin) : null;
+      const mal = ini && fin && fin <= ini;
+      $('#aDia').innerHTML = (c ? `<div class="alert" style="margin-bottom:8px">${ico('alert')}<div>Se cruza con <b>${esc(c.titulo)}</b> (${esc(c.hora_inicio)} a ${esc(c.hora_fin)}). Elija otra hora o fecha.</div></div>` : '')
+        + (mal ? `<div class="alert" style="margin-bottom:8px">${ico('alert')}<div>La hora de terminación debe ser posterior a la de inicio.</div></div>` : '')
+        + (ese.length ? `<div class="alert info">${ico('calendar')}<div><b>Ya agendado ese día:</b> ${ese.map((x) => `${esc(x.hora_inicio)}–${esc(x.hora_fin)} ${esc(x.titulo)}`).join(' · ')}</div></div>` : '');
+      $('#aGuardar').disabled = !!c || !!mal;
+    };
+    ['#aFec', '#aIni', '#aFin'].forEach((sel) => $(sel).addEventListener('input', revisar));
+    f.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const d = leerForm(f); d.token = S.ag.token;
+      let nuevo; try { nuevo = await ocupado(ev.submitter, () => api('agendaGuardar', d)); } catch (e) { return; }
+      toast('Evento registrado.');
+      pintarAgenda(nuevo);
+    });
+    $('#agSalir').addEventListener('click', () => { guardado.set('ipuc_ag', ''); S.ag = { token: '' }; iniciarAgenda(); });
+  }
+
+  // ───────────────────────── Informe semanal (formato F JL 02) ─────────────────────────
+  // Mismos cálculos que calcularSemana_() en Code.gs.
+  function numeroALetras(n) {
+    n = Math.floor(Math.abs(Number(n) || 0));
+    if (n === 0) return 'CERO PESOS M/CTE';
+    const U = ['', 'UNO', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE', 'DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE', 'VEINTE', 'VEINTIUNO', 'VEINTIDÓS', 'VEINTITRÉS', 'VEINTICUATRO', 'VEINTICINCO', 'VEINTISÉIS', 'VEINTISIETE', 'VEINTIOCHO', 'VEINTINUEVE'];
+    const D = ['', '', '', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA'];
+    const C = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS'];
+    const apo = (s) => s.replace(/VEINTIUNO$/, 'VEINTIÚN').replace(/UNO$/, 'UN');
+    const cien = (x) => { if (!x) return ''; if (x === 100) return 'CIEN'; const c = Math.floor(x / 100), r = x % 100; return [C[c], r === 0 ? '' : r < 30 ? U[r] : D[Math.floor(r / 10)] + (r % 10 ? ' Y ' + U[r % 10] : '')].filter(Boolean).join(' '); };
+    const mil = (x) => { const m = Math.floor(x / 1000), r = x % 1000; return [m === 0 ? '' : m === 1 ? 'MIL' : apo(cien(m)) + ' MIL', cien(r)].filter(Boolean).join(' '); };
+    const mm = Math.floor(n / 1e6), resto = n % 1e6;
+    let t = [mm === 0 ? '' : mm === 1 ? 'UN MILLÓN' : apo(mil(mm)) + ' MILLONES', apo(mil(resto))].filter(Boolean).join(' ');
+    if (mm && !resto) t += ' DE';
+    return t + (n === 1 ? ' PESO M/CTE' : ' PESOS M/CTE');
+  }
+
+  function calcSemana(d, porc, billetes) {
+    const n = (v) => Math.round(Number(v) || 0);
+    const bill = billetes.reduce((a, b) => a + b * n(d.conteo[b]), 0);
+    const conteo = bill + n(d.conteo.monedas) + n(d.conteo.nequi);
+    const fila = (v) => { const a1 = Math.round(v * porc[0] / 100), a2 = Math.round((v - a1) * porc[1] / 100), a3 = Math.round((v - a1 - a2) * porc[2] / 100); return { diezmos: v, a1, a2, a3, neto: v - a1 - a2 - a3 }; };
+    const dia = fila(conteo), noche = fila(n(d.diezmos.noche)), sobres = fila(n(d.diezmos.sobres));
+    const total = fila(dia.diezmos + noche.diezmos + sobres.diezmos);
+    const subtotalOfrendas = d.cultos.reduce((a, c) => a + n(c.ofrenda), 0);
+    const totalEgresos = d.egresos.reduce((a, e) => a + n(e.valor), 0);
+    const totalSectores = d.sectores.reduce((a, s) => a + n(s.ofrenda), 0);
+    const totalAportes = total.a1 + total.a2 + total.a3;
+    const totalOfrendas = subtotalOfrendas - totalEgresos;
+    const totalGeneral = totalAportes + totalOfrendas + totalSectores;
+    return { billetes: bill, conteo, dia, noche, sobres, total, netoMenosNequi: total.neto - n(d.conteo.nequi), totalAportes, subtotalOfrendas, totalEgresos, totalOfrendas, totalSectores, totalGeneral, letras: numeroALetras(totalGeneral) };
+  }
+
+  const leerRuta = (o, r) => r.split('.').reduce((x, k) => (x == null ? x : x[k]), o);
+  function ponerRuta(o, r, v) { const p = r.split('.'); const u = p.pop(); p.reduce((x, k) => x[k], o)[u] = v; }
+
+  async function vSemana(fecha) {
+    $('#pageSubtitle').textContent = puede('semana.editar') ? 'Relación de ingresos de cultos semanales · todos diligencian, el tesorero o el administrador cierra el domingo' : 'Relación de ingresos de cultos semanales · su perfil solo permite consultar';
+    $('#view').innerHTML = '<div class="card empty">Cargando…</div>';
+    const [sem, semanas] = await Promise.all([api('obtenerSemana', { fecha: fecha || S.semFecha || S.ini.hoy }), api('listarSemanas')]);
+    S.sem = sem; S.semFecha = sem.domingo; S.semDatos = JSON.parse(JSON.stringify(sem.datos)); S.semCambios = {}; S.semanas = semanas;
+    pintarSemana();
+  }
+
+  function pintarSemana() {
+    const sem = S.sem, d = S.semDatos, porc = sem.calculo.porcentajes;
+    const cerrada = sem.estado === 'CERRADA';
+    const editable = !cerrada && puede('semana.editar');
+    const ro = editable ? '' : 'disabled';
+    const din = (ruta, extra) => `<input class="cell-in money-in" data-ruta="${ruta}" inputmode="numeric" value="${Number(leerRuta(d, ruta)) ? Number(leerRuta(d, ruta)).toLocaleString('es-CO') : ''}" placeholder="0" ${ro} ${extra || ''}>`;
+    const txt = (ruta, ph) => `<input class="cell-in" data-ruta="${ruta}" value="${esc(leerRuta(d, ruta))}" placeholder="${ph || ''}" ${ro}>`;
+    const fec = (ruta) => `<input class="cell-in" type="date" data-ruta="${ruta}" value="${esc(leerRuta(d, ruta))}" min="${sem.lunes}" max="${sem.domingo}" ${ro}>`;
+    const cal = (k) => `<span data-calc="${k}">—</span>`;
+    let a = `<button class="btn ghost" data-act="pdfSemana">${ico('pdf')}<span>Descargar PDF</span></button><button class="btn ghost" data-act="pdfLiquidacion" title="Comprobante para entregar al pastor">${ico('pdf')}<span>Liquidación de diezmos</span></button>`;
+    if (editable) a = `<button class="btn" data-act="guardarSemana" id="btnGuardarSem" disabled>${ico('check')}<span>Guardar</span></button>` + a;
+    if (!cerrada && puede('semana.cerrar')) a += `<button class="btn gold" data-act="cerrarSemana">${ico('lock')}<span>Cerrar semana</span></button>`;
+    if (cerrada && puede('semana.reabrir')) a += `<button class="btn danger" data-act="reabrirSemana">Reabrir</button>`;
+    if (puede('semana.listas')) a = `<button class="btn ghost" data-act="editarLista" data-clave="SECTORES">${ico('cog')}<span>Sectores</span></button><button class="btn ghost" data-act="editarLista" data-clave="CULTOS_SEMANALES">${ico('cog')}<span>Cultos</span></button>` + a;
+    acciones(a);
+    const filaDz = (t, k, editable) => `<tr><td><b>${t}</b></td><td class="num">${editable ? din('diezmos.' + k) : cal(k + '.diezmos')}</td>
+      <td class="num">${cal(k + '.a1')}</td><td class="num">${cal(k + '.a2')}</td><td class="num">${cal(k + '.a3')}</td><td class="num"><b>${cal(k + '.neto')}</b></td></tr>`;
+    $('#view').innerHTML = `
+      <div class="card sem-head">
+        <button class="icon-btn" data-act="semanaAnt" title="Semana anterior">‹</button>
+        <div style="flex:1;min-width:0"><b style="color:var(--azul);font-size:17px">Semana del ${fechaCorta(sem.lunes)} al ${fechaCorta(sem.domingo)}</b>
+          <div class="muted" style="font-size:13px">${cerrada ? `Cerrada por ${esc(sem.firmado_por)} · ${esc(sem.cerrado_en)}${sem.contabilizado === 'SI' ? ' · registrada en contabilidad' : ''}` : sem.actualizado_por ? `Última edición: ${esc(sem.actualizado_por)} · ${esc(sem.actualizado_en)}` : 'Sin datos todavía'}</div></div>
+        ${cerrada ? `<span class="badge b-ok">${ico('lock').replace('<svg', '<svg width="11" height="11"')} Cerrada</span>` : '<span class="badge b-egr">Abierta</span>'}
+        <span id="semPend" class="badge b-bad" hidden>Cambios sin guardar</span>
+        <label class="sem-pick" title="Escoger la semana en el calendario">${ico('calendar')}<input type="date" id="semPick" value="${esc(sem.domingo)}" aria-label="Escoger semana"></label>
+        <button class="icon-btn" data-act="semanaSig" title="Semana siguiente">›</button>
+      </div>
+      <div class="card"><div class="card-head"><h3>Informe de diezmos</h3><span class="muted">${porc[0]}% del total · ${porc[1]}% de (total − ${porc[0]}%) · ${porc[2]}% del resto</span></div>
+        <div class="table-wrap"><table class="sem-t"><thead><tr><th>IT</th><th class="num">Diezmos</th><th class="num">${porc[0]}%</th><th class="num">${porc[1]}%</th><th class="num">${porc[2]}%</th><th class="num">Neto</th></tr></thead><tbody>
+          ${filaDz('Día <span class="muted" style="font-weight:400;font-size:12px">(conteo)</span>', 'dia', false)}${filaDz('Noche', 'noche', true)}${filaDz('Sobres', 'sobres', true)}
+          <tr class="sem-tot"><td>TOTAL</td><td class="num">${cal('total.diezmos')}</td><td class="num">${cal('total.a1')}</td><td class="num">${cal('total.a2')}</td><td class="num">${cal('total.a3')}</td><td class="num">${cal('total.neto')}</td></tr>
+        </tbody></table></div>
+        <div class="grid g-2" style="margin-top:34px;gap:12px">
+          <div class="sem-box"><small>Total suma de aportes (${porc.join('% + ')}%)</small><b>${cal('totalAportes')}</b></div>
+          <div class="sem-box"><small>Neto menos Nequi</small><b>${cal('netoMenosNequi')}</b></div>
+        </div></div>
+      <div class="grid g-21">
+        <div class="card"><div class="card-head"><h3>Relación de cultos semanales</h3>
+            <button class="btn ghost sm ${S.verProm ? 'on' : ''}" data-act="verPromedio" title="Mostrar u ocultar la asistencia promedio">${ico('users')}<span>Promedio</span></button></div>
+          <div class="table-wrap"><table class="sem-t ${S.verProm ? '' : 'sin-prom'}" id="tCultos"><thead><tr><th>Cultos</th><th class="num">Ofrenda</th><th>¿Se realizó?</th><th>Fecha</th><th class="num c-prom">Promedio</th></tr></thead><tbody>
+            ${d.cultos.map((c, i) => `<tr><td>${i < d.cultos.length - 3 ? `<b>${esc(c.nombre)}</b>` : txt(`cultos.${i}.nombre`, 'Otro culto')}</td>
+              <td class="num">${din(`cultos.${i}.ofrenda`)}</td>
+              <td style="text-align:center"><input type="checkbox" data-ruta="cultos.${i}.realizado" ${c.realizado ? 'checked' : ''} ${ro}></td>
+              <td>${fec(`cultos.${i}.fecha`)}</td>
+              <td class="num c-prom"><input class="cell-in" style="width:70px;text-align:right" data-ruta="cultos.${i}.promedio" inputmode="numeric" value="${esc(c.promedio || '')}" ${ro}></td></tr>`).join('')}
+            <tr class="sem-tot"><td>Subtotal</td><td class="num">${cal('subtotalOfrendas')}</td><td colspan="3"></td></tr>
+            <tr><td class="muted">(−) Egresos</td><td class="num muted">${cal('totalEgresos')}</td><td colspan="3"></td></tr>
+            <tr class="sem-tot"><td>TOTAL OFRENDAS</td><td class="num">${cal('totalOfrendas')}</td><td colspan="3"></td></tr>
+          </tbody></table></div></div>
+        <div class="card"><div class="card-head"><h3>Diezmos · conteo de billetes</h3></div>
+          <div class="table-wrap"><table class="sem-t"><thead><tr><th>Billete</th><th class="num">Cantidad</th><th class="num">Valor</th></tr></thead><tbody>
+            ${sem.billetes.map((b) => `<tr><td>${pesos(b)}</td><td class="num"><input class="cell-in" style="width:70px;text-align:right" type="number" min="0" step="1" data-ruta="conteo.${b}" value="${Number(d.conteo[b]) || ''}" placeholder="0" ${ro}></td><td class="num">${cal('b' + b)}</td></tr>`).join('')}
+            <tr><td>Monedas</td><td></td><td class="num">${din('conteo.monedas')}</td></tr>
+            <tr><td>Nequi</td><td></td><td class="num">${din('conteo.nequi')}</td></tr>
+            <tr class="sem-tot"><td colspan="2">TOTAL</td><td class="num">${cal('conteo')}</td></tr>
+          </tbody></table></div>
+          <p class="muted" style="font-size:12.5px;margin:30px 0 0">Este total es el diezmo del <b>día</b> en el informe de diezmos.</p></div>
+      </div>
+      <div class="grid g-2">
+        <div class="card"><div class="card-head"><h3>Cultos en los sectores</h3></div>
+          <div class="table-wrap"><table class="sem-t"><thead><tr><th>Cultos de barrio</th><th>Fecha</th><th class="num">Ofrenda</th></tr></thead><tbody>
+            ${d.sectores.map((s, i) => `<tr><td>${i < d.sectores.length - 3 ? `<b>${esc(s.nombre)}</b>` : txt(`sectores.${i}.nombre`, 'Otro sector')}</td><td>${fec(`sectores.${i}.fecha`)}</td><td class="num">${din(`sectores.${i}.ofrenda`)}</td></tr>`).join('')}
+            <tr class="sem-tot"><td colspan="2">TOTAL OFRENDAS</td><td class="num">${cal('totalSectores')}</td></tr>
+          </tbody></table></div></div>
+        <div class="card"><div class="card-head"><h3>Egresos</h3></div>
+          <div class="table-wrap"><table class="sem-t"><thead><tr><th>No.</th><th>Detalle</th><th class="num">Valor</th></tr></thead><tbody>
+            ${d.egresos.map((e, i) => `<tr><td>${i + 1}</td><td>${txt(`egresos.${i}.detalle`, 'Detalle del gasto')}</td><td class="num">${din(`egresos.${i}.valor`)}</td></tr>`).join('')}
+            <tr class="sem-tot"><td colspan="2">TOTAL</td><td class="num">${cal('totalEgresos')}</td></tr>
+          </tbody></table></div></div>
+      </div>
+      <div class="grid g-21">
+        <div class="card kpi hero" style="display:block"><small>Total general ingresos</small><b style="font-size:30px">${cal('totalGeneral')}</b>
+          <div class="foot" style="margin-top:8px">Aportes ${cal('totalAportes')} + ofrendas ${cal('totalOfrendas')} + sectores ${cal('totalSectores')}</div>
+          <div style="margin-top:12px;font-size:13px;letter-spacing:.3px"><span style="opacity:.75">VALOR EN LETRAS:</span> ${cal('letras')}</div></div>
+        <div class="card"><div class="card-head"><h3>Observaciones</h3></div>
+          <textarea class="cell-in" data-ruta="observaciones" rows="4" style="width:100%" ${ro}>${esc(d.observaciones)}</textarea></div>
+      </div>
+      <div class="card"><div class="card-head"><h3>Semanas recientes</h3></div>
+        ${S.semanas.length ? `<div class="table-wrap"><table><thead><tr><th>Semana</th><th class="num">Diezmos</th><th class="num">Aportes</th><th class="num">Total general</th><th>Estado</th><th></th></tr></thead><tbody>
+          ${S.semanas.map((w) => `<tr><td><b>${fechaCorta(w.lunes)} – ${fechaCorta(w.domingo)}</b></td><td class="num">${pesos(w.total_diezmos)}</td><td class="num">${pesos(w.total_aportes)}</td><td class="num"><b>${pesos(w.total_general)}</b></td>
+            <td>${w.estado === 'CERRADA' ? `<span class="badge b-ok">Cerrada · ${esc(w.firmado_por)}</span>` : '<span class="badge b-egr">Abierta</span>'}</td>
+            <td style="white-space:nowrap"><button class="btn ghost sm" data-act="irSemana" data-fecha="${w.domingo}">Abrir</button>${w.pdf_url ? ` <a class="btn ghost sm" href="#" data-act="verPdf" data-url="${esc(w.pdf_url)}">${ico('pdf')}</a>` : ''}</td></tr>`).join('')}
+          </tbody></table></div>` : '<div class="empty">Todavía no hay semanas registradas.</div>'}</div>`;
+    $$('.money-in').forEach(inputDinero);
+    pintarCalculos();
+  }
+
+  function domingoCliente(f) {
+    const [y, m, d] = f.split('-').map(Number);
+    const dt = new Date(y, m - 1, d, 12); dt.setDate(dt.getDate() + (7 - dt.getDay()) % 7);
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+  }
+
+  function alCambiarSemana(ev) {
+    const el = ev.target.closest('[data-ruta]');
+    if (!el || S.vista !== 'semana') return;
+    const r = el.dataset.ruta;
+    const v = el.type === 'checkbox' ? el.checked
+      : el.classList.contains('money-in') || /conteo\.\d+$/.test(r) ? soloDigitos(el.value)
+      : /promedio$/.test(r) ? soloDigitos(el.value) : el.value;
+    ponerRuta(S.semDatos, r, v);
+    S.semCambios[r] = v;
+    $('#btnGuardarSem') && ($('#btnGuardarSem').disabled = false);
+    $('#semPend').hidden = false;
+    pintarCalculos();
+  }
+
+  function pintarCalculos() {
+    const c = calcSemana(S.semDatos, S.sem.calculo.porcentajes, S.sem.billetes);
+    S.sem.billetes.forEach((b) => { c['b' + b] = (Number(S.semDatos.conteo[b]) || 0) * b; });
+    $$('[data-calc]').forEach((el) => {
+      const v = leerRuta(c, el.dataset.calc);
+      el.textContent = typeof v === 'number' ? pesos(v) : v;
+      if (el.dataset.calc === 'totalGeneral') el.style.color = v < 0 ? 'var(--danger)' : '';
+    });
+  }
+
+  const semPendiente = () => S.semCambios && Object.keys(S.semCambios).length > 0;
+  function cambiarSemana(fecha) {
+    if (semPendiente() && !confirm('Hay cambios sin guardar en esta semana. ¿Salir sin guardarlos?')) return;
+    S.semFecha = fecha; S.semCambios = {}; vSemana(fecha);
+  }
+
+  async function guardarSemana(btn) {
+    if (!semPendiente()) return;
+    const r = await ocupado(btn, () => api('guardarSemana', { domingo: S.sem.domingo, cambios: S.semCambios }));
+    S.sem = r; S.semDatos = JSON.parse(JSON.stringify(r.datos)); S.semCambios = {};
+    S.semanas = await api('listarSemanas');
+    pintarSemana();
+    toast('Semana guardada. Se ven también los datos que otros hayan ingresado.');
+  }
+
+  function formCerrarSemana() {
+    if (semPendiente()) return toast('Guarde los cambios antes de cerrar la semana.', true);
+    const c = S.sem.calculo;
+    const ingresos = c.totalAportes + c.subtotalOfrendas + c.totalSectores;
+    if (c.totalGeneral < 0) return toast(`Los egresos (${pesos(c.totalEgresos)}) superan los ingresos de la semana: aportes + ofrendas + sectores = ${pesos(ingresos)}.`, true);
+    const body = abrirModal('Cerrar la semana', `<form class="form" id="fCerrarSem" style="grid-template-columns:1fr">
+      <div class="summary">
+        <div><span>Total diezmos</span><b>${pesos(c.total.diezmos)}</b></div>
+        <div><span>Aportes (${c.porcentajes.join('% + ')}%)</span><b>${pesos(c.totalAportes)}</b></div>
+        <div><span>Total ofrendas (menos egresos)</span><b>${pesos(c.totalOfrendas)}</b></div>
+        <div><span>Cultos en sectores</span><b>${pesos(c.totalSectores)}</b></div>
+        <div class="total"><span>Total general</span><span>${pesos(c.totalGeneral)}</span></div>
+      </div>
+      <div class="alert info">${ico('lock')}<div>Quedará registrado que la cerró <b>${esc(S.ini.usuario.nombre || S.ini.usuario.email)}</b> (${esc(S.ini.usuario.rol)}), con la fecha y la hora. La semana queda bloqueada.</div></div>
+      <div class="summary" style="margin-top:10px">
+        <div><span>Neto de diezmos para el pastor</span><b>${pesos(c.total.neto)}</b></div>
+        <div><span>(−) Recibido por Nequi</span><b>${pesos(Number(S.semDatos.conteo.nequi) || 0)}</b></div>
+        <div class="total"><span>Entregar al pastor en efectivo</span><span>${pesos(Math.max(0, c.netoMenosNequi))}</span></div>
+      </div>
+      ${S.ini.config.CONTABILIZAR_SEMANA !== 'NO' ? `<div class="alert info">${ico('report')}<div>Al cerrar se registran en la contabilidad, con fecha ${fechaCorta(S.sem.domingo)}, los aportes (${pesos(c.totalAportes)}), las ofrendas, los sectores y los egresos. El neto de diezmos se liquida al pastor y no cuenta como ingreso.</div></div>` : ''}
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" type="submit">${ico('lock')} Cerrar y generar PDF</button></div></form>`);
+    $('#fCerrarSem', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const r = await ocupado(ev.submitter, () => api('cerrarSemana', { domingo: S.sem.domingo }));
+      cerrarModal();
+      toast('Semana cerrada. Descargue la liquidación de diezmos para entregarla al pastor.');
+      if (r.pdf_url) verPdf(r.pdf_url);
+      vSemana(r.domingo);
+    });
+  }
+
+  // ───────────────────────── Reportes ─────────────────────────
+  function rango(tipo) {
+    const [y, m] = S.ini.hoy.split('-').map(Number);
+    const f = (a, b, c) => `${a}-${String(b).padStart(2, '0')}-${String(c).padStart(2, '0')}`;
+    if (tipo === 'mesAnt') { const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1; return [f(py, pm, 1), f(py, pm, new Date(py, pm, 0).getDate())]; }
+    if (tipo === 'anio') return [f(y, 1, 1), S.ini.hoy];
+    return [inicioMes(), S.ini.hoy];
+  }
+
+  async function vReportes() {
+    $('#pageSubtitle').textContent = 'Informes financieros en PDF con el membrete institucional';
+    S.rep = S.rep || rango('mes');
+    $('#view').innerHTML = `<div class="card"><div class="filters" id="fRep">
+        <div class="seg" id="presets"><button data-pre="mes" class="on">Este mes</button><button data-pre="mesAnt">Mes anterior</button><button data-pre="anio">Este año</button></div>
+        ${campo('rDesde', 'Desde', `<input type="date" id="rDesde" value="${S.rep[0]}">`)}
+        ${campo('rHasta', 'Hasta', `<input type="date" id="rHasta" value="${S.rep[1]}">`)}
+        <button class="btn" data-act="verResumen">Consultar</button>
+        <button class="btn gold" data-act="pdfPeriodo">${ico('pdf')} Generar PDF</button>
+      </div></div>
+      <div id="resumen"></div>
+      <div class="card"><div class="card-head"><h3>Archivo de PDF en Drive</h3><span class="muted">Diarios automáticos, cierres y reportes</span></div><div id="archivo"><div class="empty">Cargando…</div></div></div>`;
+    $('#presets').addEventListener('click', (e) => {
+      const b = e.target.closest('[data-pre]'); if (!b) return;
+      $$('#presets button').forEach((x) => x.classList.toggle('on', x === b));
+      S.rep = rango(b.dataset.pre); $('#rDesde').value = S.rep[0]; $('#rHasta').value = S.rep[1]; verResumen();
+    });
+    verResumen();
+    const arch = await api('listarReportes');
+    $('#archivo').innerHTML = arch.length ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Tipo</th><th>Archivo</th><th>Generado por</th><th></th></tr></thead><tbody>
+      ${arch.map((r) => `<tr><td>${fechaCorta(r.fecha)}</td><td><span class="badge b-tr">${esc(r.tipo)}</span></td><td>${esc(r.nombre)}</td><td class="muted">${esc(r.generado_por)}</td><td><a class="btn ghost sm" href="#" data-act="verPdf" data-url="${esc(r.url)}">${ico('pdf')} Abrir</a></td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">Todavía no hay PDF generados.</div>';
+  }
+
+  async function verResumen() {
+    S.rep = [$('#rDesde').value, $('#rHasta').value];
+    $('#resumen').innerHTML = '<div class="card empty">Calculando…</div>';
+    const r = await api('resumenPeriodo', { desde: S.rep[0], hasta: S.rep[1] });
+    S.resumen = r;
+    const tabla = (arr, total) => arr.length ? arr.map((x) => `<div class="bar-row"><div style="display:flex;justify-content:space-between;gap:8px"><span>${esc(x.categoria)}</span><b>${pesos(x.valor)} <span class="muted" style="font-weight:400">${total ? Math.round(x.valor * 100 / total) : 0}%</span></b></div><div class="track"><div class="fill" style="width:${Math.max(3, total ? x.valor * 100 / total : 0)}%"></div></div></div>`).join('') : '<div class="empty">Sin registros.</div>';
+    $('#resumen').innerHTML = `<div class="grid g-4">
+        <div class="card kpi"><div class="ico t-cyan">${ico('in')}</div><div><small>Ingresos</small><b>${pesos(r.totalIngresos)}</b></div></div>
+        <div class="card kpi"><div class="ico t-dorado">${ico('out')}</div><div><small>Gastos</small><b>${pesos(r.totalEgresos)}</b></div></div>
+        <div class="card kpi"><div class="ico t-azul">${ico('report')}</div><div><small>Resultado</small><b style="color:${r.resultado < 0 ? 'var(--danger)' : 'inherit'}">${pesos(r.resultado)}</b></div></div>
+        <div class="card kpi hero"><div class="ico t-blanco">${ico('wallet')}</div><div><small>Saldo final</small><b>${pesos(r.saldoFinal.CAJA + r.saldoFinal.NEQUI)}</b><div class="foot">Inicial ${pesos(r.saldoInicial.CAJA + r.saldoInicial.NEQUI)}</div></div></div>
+      </div>
+      <div class="grid g-2" style="margin-top:20px">
+        <div class="card"><div class="card-head"><h3>Ingresos por categoría</h3></div>${tabla(r.ingresos, r.totalIngresos)}</div>
+        <div class="card"><div class="card-head"><h3>Gastos por categoría</h3></div>${tabla(r.egresos, r.totalEgresos)}</div>
+      </div>`;
+  }
+
+  // ───────────────────────── Usuarios ─────────────────────────
+  async function vUsuarios() {
+    $('#pageSubtitle').textContent = 'Cada persona entra con su usuario y contraseña';
+    acciones(`<button class="btn gold" data-act="nuevoUsuario">${ico('plus')}<span>Nuevo usuario</span></button>`);
+    S.usuarios = await api('listarUsuarios');
+    $('#view').innerHTML = `<div class="grid g-21">
+      <div class="card"><div class="card-head"><h3>Usuarios</h3></div><div class="table-wrap"><table><thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>Último ingreso</th><th></th></tr></thead><tbody>
+      ${S.usuarios.map((u) => `<tr><td><b>${esc(u.nombre)}</b><div class="muted" style="font-size:12.5px">${esc(u.email)}</div></td><td><span class="badge b-tr">${esc(u.rol)}</span></td>
+        <td>${u.activo === 'SI' ? '<span class="badge b-ok">Activo</span>' : '<span class="badge b-bad">Inactivo</span>'}${!u.tieneClave ? ' <span class="badge b-egr">Sin contraseña</span>' : u.cambiarClave ? ' <span class="badge b-egr">Clave temporal</span>' : ''}</td>
+        <td class="muted" style="font-size:13px">${esc(u.ultimo_ingreso || '—')}</td>
+        <td style="white-space:nowrap"><button class="btn ghost sm" data-act="editarUsuario" data-email="${esc(u.email)}">Editar</button>
+          <button class="btn ghost sm" data-act="restablecerClave" data-email="${esc(u.email)}">${u.tieneClave ? 'Restablecer clave' : 'Crear clave'}</button></td></tr>`).join('')}
+      </tbody></table></div></div>
+      <div class="card"><div class="card-head"><h3>Roles</h3></div>${S.ini.roles.map((r) => `<div style="padding:8px 0;border-bottom:1px dashed var(--line)"><span class="badge b-tr">${r.rol}</span><div class="muted" style="margin-top:4px;font-size:13.5px">${esc(r.descripcion)}</div></div>`).join('')}</div>
+    </div>`;
+  }
+
+  function formUsuario(email) {
+    const u = (S.usuarios || []).find((x) => x.email === email) || { rol: 'TESORERO', activo: 'SI' };
+    const body = abrirModal(email ? 'Editar usuario' : 'Nuevo usuario', `<form class="form" id="fUsr">
+      ${campo('uEmail', 'Usuario para ingresar (correo o nombre de usuario)', `<input name="email" id="uEmail" autocapitalize="none" value="${esc(u.email || '')}" ${email ? 'readonly' : ''} required>`, 'full')}
+      ${campo('uNom', 'Nombre', `<input name="nombre" id="uNom" value="${esc(u.nombre || '')}">`)}
+      ${campo('uRol', 'Rol', `<select name="rol" id="uRol">${opciones(S.ini.roles.map((r) => r.rol), u.rol)}</select>`)}
+      ${campo('uAct', 'Estado', `<select name="activo" id="uAct">${opciones([{ v: 'SI', t: 'Activo' }, { v: 'NO', t: 'Inactivo' }], u.activo)}</select>`)}
+      <div class="full alert info" id="uDesc"></div>
+      <div class="form-actions"><button type="button" class="btn ghost" data-close>Cancelar</button><button class="btn gold" type="submit">Guardar</button></div></form>`);
+    const desc = () => { $('#uDesc', body).textContent = (S.ini.roles.find((r) => r.rol === $('#uRol', body).value) || {}).descripcion || ''; };
+    $('#uRol', body).addEventListener('change', desc); desc();
+    $('#fUsr', body).addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const r = await ocupado(ev.submitter, () => api('guardarUsuario', leerForm(ev.target)));
+      cerrarModal(); ir('usuarios');
+      if (r.claveTemporal) mostrarClaveTemporal(r.email, r.claveTemporal); else toast('Usuario guardado.');
+    });
+  }
+
+  // ───────────────────────── Configuración ─────────────────────────
+  const CAMPOS_CONFIG = [
+    ['NOMBRE_CONGREGACION', 'Nombre de la congregación'], ['DIRECCION', 'Dirección'], ['CIUDAD', 'Ciudad (opcional)'], ['TELEFONO', 'Teléfono (opcional)'], ['EMAIL', 'Correo de la congregación'],
+    ['NIT', 'NIT'], ['PASTOR', 'Pastor'], ['TESORERO', 'Tesorero(a)'], ['VERIFICADOR', 'Verificador habitual de caja'],
+    ['NEQUI_NUMERO', 'Número Nequi'], ['FECHA_INICIO', 'Fecha de inicio', 'date'],
+    ['SALDO_INICIAL_CAJA', 'Saldo inicial en caja', 'money'], ['SALDO_INICIAL_NEQUI', 'Saldo inicial en Nequi', 'money'],
+    ['PORC_APORTE_1', 'Informe semanal: primer % (sobre el total)'], ['PORC_APORTE_2', 'Segundo % (sobre total − primero)'],
+    ['PORC_APORTE_3', 'Tercer % (sobre el resto)'], ['CONTABILIZAR_SEMANA', 'Pasar la semana cerrada a contabilidad', 'sino'],
+    ['LOGO_FILE_ID', 'ID de otro logo PNG en Drive (opcional)'], ['COMPARTIR_AUTOMATICO', 'Compartir hoja y carpeta al autorizar usuarios', 'sino'],
+  ];
+
+  async function vConfig() {
+    $('#pageSubtitle').textContent = 'Datos del membrete, saldos iniciales y categorías';
+    const c = S.ini.config;
+    $('#view').innerHTML = `<div class="grid g-21">
+      <div class="card" style="align-self:start"><div class="card-head"><h3>Datos de la congregación</h3></div><form class="form" id="fCfg">
+        ${CAMPOS_CONFIG.map(([k, t, tipo]) => campo('c_' + k, t, tipo === 'sino'
+          ? `<select name="${k}" id="c_${k}">${opciones(['SI', 'NO'], c[k])}</select>`
+          : tipo === 'money' ? `<input name="${k}" id="c_${k}" inputmode="numeric" value="${Number(c[k] || 0).toLocaleString('es-CO')}">`
+          : `<input ${tipo === 'date' ? 'type="date"' : ''} name="${k}" id="c_${k}" value="${esc(c[k])}">`, tipo === 'full' ? 'full' : '')).join('')}
+        <div class="form-actions"><button class="btn gold" type="submit">Guardar cambios</button></div></form></div>
+      <div class="grid" style="align-content:start">
+      <div class="card"><div class="card-head"><h3>Cultos y sectores del informe semanal</h3></div>
+        <p class="muted" style="margin:0 0 12px;font-size:14px">${esc(listaCfg('SECTORES').join(' · '))}</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn ghost sm" data-act="editarLista" data-clave="SECTORES">Editar sectores</button>
+          <button class="btn ghost sm" data-act="editarLista" data-clave="CULTOS_SEMANALES">Editar cultos</button></div></div>
+      <div class="card"><div class="card-head"><h3>Enlace de eventos para comités</h3></div>
+        <p class="muted" style="margin:0 0 10px;font-size:14px">Los representantes entran solo con su nombre y su comité para agendar eventos y ver los que registraron. Los comités y sus representantes se escriben en la hoja <b>Comites</b>.</p>
+        <div class="field"><input readonly value="${esc(S.ini.urlAgenda)}" onclick="this.select()"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px"><button class="btn ghost sm" data-act="copiarEnlace">Copiar enlace</button>
+          ${S.ini.urlHoja ? `<a class="btn ghost sm" href="${esc(S.ini.urlHoja)}" target="_blank">Abrir hoja de datos</a>` : ''}</div></div>
+      <div class="card"><div class="card-head"><h3>Categorías</h3></div>
+        <form class="filters" id="fCat" style="margin-bottom:12px">
+          <select name="tipo" class="field" style="border:1px solid var(--line);border-radius:10px;padding:8px">${opciones([{ v: 'INGRESO', t: 'Ingreso' }, { v: 'EGRESO', t: 'Gasto' }])}</select>
+          <input name="nombre" placeholder="Nueva categoría" style="flex:1;border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-width:120px" required>
+          <button class="btn sm">${ico('plus')}</button></form>
+        <div id="listaCats"></div></div></div></div>`;
+    $$('#fCfg [inputmode=numeric]').forEach(inputDinero);
+    pintarCategorias();
+    $('#fCfg').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const d = leerForm(ev.target);
+      ['SALDO_INICIAL_CAJA', 'SALDO_INICIAL_NEQUI'].forEach((k) => { d[k] = soloDigitos(d[k]); });
+      S.ini.config = await ocupado(ev.submitter, () => api('guardarConfig', d));
+      $('#brandCongregacion').textContent = S.ini.config.NOMBRE_CONGREGACION;
+      toast('Configuración guardada.');
+    });
+    $('#fCat').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      S.ini.categorias = await ocupado(ev.submitter, () => api('guardarCategoria', leerForm(ev.target)));
+      ev.target.reset(); pintarCategorias(); toast('Categoría creada.');
+    });
+  }
+
+  function pintarCategorias() {
+    const grupo = (t, titulo) => `<div class="nav-section" style="color:var(--muted);opacity:1;padding-left:0">${titulo}</div>` +
+      S.ini.categorias.filter((c) => c.tipo === t).map((c) => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px dashed var(--line)">
+        <span style="${c.activa === 'SI' ? '' : 'color:#9aa3b5;text-decoration:line-through'}">${esc(c.nombre)}</span>
+        <span style="white-space:nowrap"><button class="btn ghost sm" data-act="renombrarCat" data-id="${esc(c.id)}">Renombrar</button>
+        <button class="btn ghost sm" data-act="toggleCat" data-id="${esc(c.id)}">${c.activa === 'SI' ? 'Desactivar' : 'Activar'}</button></span></div>`).join('');
+    $('#listaCats').innerHTML = grupo('INGRESO', 'Ingresos') + grupo('EGRESO', 'Gastos');
+  }
+
+  // ───────────────────────── Auditoría ─────────────────────────
+  async function vAuditoria() {
+    $('#pageSubtitle').textContent = 'Últimas 300 acciones registradas';
+    const a = await api('listarAuditoria');
+    $('#view').innerHTML = `<div class="card">${a.length ? `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Entidad</th><th>Detalle</th></tr></thead><tbody>
+      ${a.map((x) => `<tr><td style="white-space:nowrap">${esc(x.fecha)}</td><td>${esc(x.usuario)}</td><td><span class="badge ${x.accion === 'ANULAR' || x.accion === 'REABRIR' ? 'b-bad' : 'b-tr'}">${esc(x.accion)}</span></td><td>${esc(x.entidad)} ${esc(x.entidad_id)}</td><td class="muted" style="font-size:13px">${esc(x.detalle)}</td></tr>`).join('')}
+      </tbody></table></div>` : '<div class="empty">Sin registros.</div>'}</div>`;
+  }
+
+  // ───────────────────────── Eventos globales ─────────────────────────
+  document.addEventListener('click', (ev) => {
+    const nav = ev.target.closest('[data-vista]');
+    if (nav) {
+      ev.preventDefault();
+      if (S.vista === 'semana' && semPendiente() && !confirm('Hay cambios sin guardar en el informe semanal. ¿Salir sin guardarlos?')) return;
+      S.semCambios = {};
+      ir(nav.dataset.vista); return;
+    }
+    if (ev.target.closest('[data-close]') || ev.target.id === 'modal') { cerrarModal(); return; }
+    const b = ev.target.closest('[data-act]');
+    if (!b) return;
+    const a = b.dataset.act;
+    if (a === 'nuevoIngreso') formMovimiento('INGRESO');
+    else if (a === 'nuevoEgreso') formMovimiento('EGRESO');
+    else if (a === 'filtrar') ocupado(b, cargarMovs);
+    else if (a === 'anular') anular(b.dataset.id, b.dataset.num);
+    else if (a === 'verPdf') { ev.preventDefault(); verPdf(b.dataset.url, b); }
+    else if (a === 'cambiarClave') { $('#userMenu').hidden = true; formClave(false); }
+    else if (a === 'salir') { $('#userMenu').hidden = true; salir(); }
+    else if (a === 'importarMiembros') formImportar();
+    else if (a === 'excel') menuExcel();
+    else if (a === 'verPromedio') {
+      S.verProm = !S.verProm; guardado.set('ipuc_prom', S.verProm ? '1' : '');
+      $('#tCultos').classList.toggle('sin-prom', !S.verProm); b.classList.toggle('on', S.verProm);
+    }
+    else if (a === 'editarLista') formLista(b.dataset.clave);
+    else if (a === 'copiarEnlace') copiar(S.ini.urlAgenda, 'Enlace copiado.');
+    else if (a === 'restablecerClave') restablecerClave(b.dataset.email, b);
+    else if (a === 'pdfMov') abrirPdf('pdfMovimiento', { id: b.dataset.id }, b);
+    else if (a === 'pdfDia') abrirPdf('pdfDiario', { fecha: S.fechaCaja || S.ini.hoy }, b);
+    else if (a === 'pdfPeriodo') abrirPdf('pdfPeriodo', { desde: $('#rDesde').value, hasta: $('#rHasta').value }, b);
+    else if (a === 'verResumen') verResumen();
+    else if (a === 'traslado') formTraslado();
+    else if (a === 'reabrir') {
+      const motivo = prompt('Motivo de la reapertura:');
+      if (motivo != null) ocupado(b, () => api('reabrirCaja', { id: b.dataset.id, motivo })).then(() => { toast('Caja reabierta.'); ir('caja'); });
+    }
+    else if (a === 'nuevoMiembro') formMiembro();
+    else if (a === 'nuevoEvento') formEvento(null, b.dataset.fecha);
+    else if (a === 'verEvento') verEvento(b.dataset.id);
+    else if (a === 'mesEvt') { S.evMes = b.dataset.mes; vEventos(); }
+    else if (a === 'editarMiembro') formMiembro(b.dataset.id);
+    else if (a === 'nuevoUsuario') formUsuario();
+    else if (a === 'editarUsuario') formUsuario(b.dataset.email);
+    else if (a === 'guardarPpto') guardarPpto(b);
+    else if (a === 'guardarSemana') guardarSemana(b);
+    else if (a === 'cerrarSemana') formCerrarSemana();
+    else if (a === 'pdfLiquidacion') {
+      if (semPendiente()) toast('Se usa lo último guardado. Guarde primero para incluir sus cambios.', true);
+      abrirPdf('pdfLiquidacion', { domingo: S.sem.domingo }, b).catch(() => {});
+    }
+    else if (a === 'pdfSemana') {
+      if (semPendiente()) toast('Se descarga lo último guardado. Guarde primero para incluir sus cambios.', true);
+      abrirPdf('pdfSemana', { domingo: S.sem.domingo }, b);
+    }
+    else if (a === 'semanaAnt' || a === 'semanaSig') {
+      const [y, m, d] = S.sem.domingo.split('-').map(Number);
+      const dt = new Date(y, m - 1, d + (a === 'semanaAnt' ? -7 : 7), 12);
+      cambiarSemana(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`);
+    }
+    else if (a === 'irSemana') cambiarSemana(b.dataset.fecha);
+    else if (a === 'reabrirSemana') {
+      const motivo = prompt('Motivo para reabrir la semana (se anulan sus registros en contabilidad):');
+      if (motivo != null) ocupado(b, () => api('reabrirSemana', { domingo: S.sem.domingo, motivo })).then(() => { toast('Semana reabierta.'); vSemana(S.sem.domingo); });
+    }
+    else if (a === 'renombrarCat') {
+      const c = S.ini.categorias.find((x) => x.id === b.dataset.id);
+      const nombre = prompt('Nuevo nombre para la categoría (el historial y el presupuesto se actualizan):', c.nombre);
+      if (nombre && nombre.trim() && nombre.trim() !== c.nombre) {
+        ocupado(b, () => api('guardarCategoria', { id: c.id, tipo: c.tipo, nombre: nombre.trim(), activa: c.activa }))
+          .then((cats) => { S.ini.categorias = cats; pintarCategorias(); toast('Categoría renombrada.'); });
+      }
+    }
+    else if (a === 'toggleCat') {
+      const c = S.ini.categorias.find((x) => x.id === b.dataset.id);
+      ocupado(b, () => api('guardarCategoria', { id: c.id, tipo: c.tipo, nombre: c.nombre, activa: c.activa === 'SI' ? 'NO' : 'SI' }))
+        .then((cats) => { S.ini.categorias = cats; pintarCategorias(); });
+    }
+  });
+  document.addEventListener('input', alCambiarSemana);
+  // Calendario del informe semanal: cualquier día escogido abre la semana (lunes a domingo) que lo contiene.
+  document.addEventListener('change', (ev) => {
+    if (ev.target.id !== 'semPick' || !ev.target.value || !S.sem) return;
+    if (domingoCliente(ev.target.value) === S.sem.domingo) return;
+    if (semPendiente() && !confirm('Hay cambios sin guardar en esta semana. ¿Salir sin guardarlos?')) { ev.target.value = S.sem.domingo; return; }
+    S.semCambios = {};
+    cambiarSemana(ev.target.value);
+  });
+  document.addEventListener('change', alCambiarSemana);
+  window.addEventListener('beforeunload', (e) => { if (S.vista === 'semana' && semPendiente()) { e.preventDefault(); e.returnValue = ''; } });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { cerrarModal(); $('#userMenu').hidden = true; } });
+  $('#userChip').addEventListener('click', (ev) => { ev.stopPropagation(); $('#userMenu').hidden = !$('#userMenu').hidden; });
+  document.addEventListener('click', (ev) => { if (!ev.target.closest('#userMenu')) $('#userMenu').hidden = true; });
+  $('#menuBtn').innerHTML = ico('menu');
+  $('#menuBtn').addEventListener('click', () => { $('#sidebar').classList.toggle('open'); $('#scrim').classList.toggle('open'); });
+  $('#scrim').addEventListener('click', () => { $('#sidebar').classList.remove('open'); $('#scrim').classList.remove('open'); });
+
+  // ───────────────────────── Arranque ─────────────────────────
+  function pintarLogo(el, info) {
+    // Si el logo configurado no carga, se usa el incluido en el sistema.
+    const img = new Image();
+    img.alt = 'IPUC';
+    img.onerror = () => { if (img.src !== info.logoRespaldo) img.src = info.logoRespaldo; };
+    img.src = info.logo || info.logoRespaldo;
+    el.innerHTML = ''; el.appendChild(img);
+  }
+
+  async function datosPublicos() {
+    if (!S.pub) S.pub = await api('publico');
+    $('#splash').hidden = true;
+    return S.pub;
+  }
+
+  async function mostrarLogin(msg) {
+    $('#app').hidden = true; $('#agenda').hidden = true; cerrarModal(true);
+    S.token = ''; S.ini = null;
+    const pub = await datosPublicos();
+    $('#login').hidden = false;
+    $('#login').innerHTML = `<div style="width:min(420px,100%)"><div class="login-card">
+      <div class="login-head"><div id="loginLogo"></div><small>${esc(pub.iglesia)}</small><h1>${esc(pub.congregacion)}</h1></div>
+      <form class="login-body" id="fLogin">
+        <div class="muted" style="text-align:center;font-size:14px;margin-top:-4px">Sistema administrativo y contable</div>
+        ${msg ? `<div class="alert info">${esc(msg)}</div>` : ''}
+        ${campo('lUsr', 'Usuario', '<input name="usuario" id="lUsr" autocomplete="username" autocapitalize="none" spellcheck="false" required>')}
+        ${campo('lClv', 'Contraseña', '<input type="password" name="clave" id="lClv" autocomplete="current-password" required>')}
+        <button class="btn gold" type="submit">Ingresar</button>
+      </form>
+      <div class="login-foot">¿Representa un comité? <a href="${esc(pub.url)}?p=agenda" target="_top">Agende eventos aquí</a></div></div>
+      <div class="login-lema">“${esc(pub.lema)}”</div></div>`;
+    pintarLogo($('#loginLogo'), pub);
+    $('#lUsr').value = guardado.get('ipuc_u');
+    $('#fLogin').addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const d = leerForm(ev.target);
+      let r; try { r = await ocupado(ev.submitter, () => api('ingresar', d)); } catch (e) { return; }
+      S.token = r.token; guardado.set('ipuc_t', r.token); guardado.set('ipuc_u', d.usuario.trim());
+      arrancar();
+    });
+    setTimeout(() => ($('#lUsr').value ? $('#lClv') : $('#lUsr')).focus(), 50);
+  }
+
+  async function salir() {
+    try { await api('salir'); } catch (e) { /* la sesión ya no existía */ }
+    guardado.set('ipuc_t', '');
+    mostrarLogin('Sesión cerrada.');
+  }
+
+  async function arrancar() {
+    let ini;
+    try { ini = await api('init'); } catch (e) { if (!e.silencioso) mostrarLogin(e.message); return; }
+    S.ini = ini;
+    $('#login').hidden = true; $('#splash').hidden = true;
+    pintarLogo($('#brandLogo'), ini);
+    $('#brandCongregacion').textContent = ini.config.NOMBRE_CONGREGACION || '';
+    const fh = ini.hoy.split('-');
+    $('#appbarFecha').textContent = `${Number(fh[2])} de ${MESES_L[Number(fh[1]) - 1]} de ${fh[0]}`;
+    $('#appVersion').textContent = 'Versión ' + (ini.version || '');
+    const c = ini.config;
+    $('#pie').innerHTML = `<b>IPUC ${esc(c.NOMBRE_CONGREGACION || '')}</b><span>${esc(c.DIRECCION || '')}</span>${c.EMAIL ? `<span>${esc(c.EMAIL)}</span>` : ''}<span>${esc(ini.web)}</span>`;
+    $('#userName').textContent = ini.usuario.nombre || ini.usuario.email;
+    $('#userRole').textContent = ini.usuario.rol;
+    $('#userAvatar').textContent = (ini.usuario.nombre || ini.usuario.email).trim().charAt(0).toUpperCase();
+    $('#app').hidden = false;
+    if (ini.cambiarClave) { $('#view').innerHTML = ''; pintarNav(); formClave(true); } else ir('dashboard');
+  }
+
+  // ───────────────────────── Arranque ─────────────────────────
+  const fallo = (e) => { $('#splash').hidden = false; $('#splash').innerHTML = `<p style="max-width:420px;text-align:center">No se pudo iniciar: ${esc(e.message)}</p>`; };
+  if (window.MODO === 'agenda') iniciarAgenda().catch(fallo);
+  else {
+    S.token = guardado.get('ipuc_t');
+    (S.token ? arrancar() : mostrarLogin()).catch(fallo);
+  }
+})();
+</script>

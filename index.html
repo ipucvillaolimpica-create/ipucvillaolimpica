@@ -1,84 +1,57 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <base target="_top">
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Myriad Pro (tipografía institucional) no está disponible en la web; Source Sans 3 es su equivalente libre de Adobe. -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <?!= include('Styles'); ?>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPUC Villa Olímpica · Sistema administrativo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root { --azul: #00338D; --cyan: #009FDA; --dorado: #F0AB00; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; font-family: "Source Sans 3", Calibri, Arial, sans-serif; color: #1d2433;
+    background: linear-gradient(160deg, #001f5c 0%, var(--azul) 55%, #0a58b8 100%); display: grid; place-items: center; padding: 16px; }
+  .card { background: #fff; border-radius: 18px; width: min(440px, 100%); padding: 34px 28px 26px; text-align: center;
+    box-shadow: 0 20px 50px rgba(0, 20, 60, .35); border-top: 5px solid var(--dorado); }
+  .logo { width: 140px; height: 130px; margin: 0 auto 14px; display: grid; place-items: center; }
+  .logo img { width: 100%; height: 100%; object-fit: contain; }
+  small { display: block; letter-spacing: 1.5px; font-size: 12px; color: #5b6475; text-transform: uppercase; }
+  h1 { margin: 4px 0 2px; color: var(--azul); font-size: 26px; }
+  .lema { color: var(--cyan); font-style: italic; margin: 0 0 22px; }
+  .btn { display: block; text-decoration: none; font-weight: 700; font-size: 16px; padding: 13px 16px; border-radius: 12px; margin: 10px 0; }
+  .b1 { background: var(--dorado); color: #1d2433; }
+  .b2 { border: 1px solid #d6dbe4; color: var(--azul); }
+  .btn:focus-visible { outline: 3px solid var(--cyan); outline-offset: 2px; }
+  .aviso { background: #fff7e0; border: 1px solid #f3d27a; border-radius: 10px; padding: 12px; text-align: left; font-size: 14px; }
+  footer { margin-top: 18px; font-size: 13px; color: #5b6475; }
+  footer a { color: var(--cyan); }
+</style>
 </head>
 <body>
-  <div id="splash" class="splash">
-    <div class="splash-ring"></div>
-    <p>Cargando sistema…</p>
-  </div>
+  <main class="card">
+    <div class="logo"><img id="logo" alt="IPUC Villa Olímpica"></div>
+    <small>Iglesia Pentecostal Unida de Colombia</small>
+    <h1>Villa Olímpica</h1>
+    <p class="lema">"Un Señor, una fe, un bautismo"</p>
+    <div id="zona"></div>
+    <footer>Carrera 62 - Calle 8ª · <a href="https://www.ipuc.org.co" target="_blank" rel="noopener">www.ipuc.org.co</a></footer>
+  </main>
+<script>
+  // ▼ Pegue aquí la URL de la aplicación web (Apps Script → Implementar → Gestionar implementaciones). Termina en /exec
+  const URL_APP = 'https://script.google.com/macros/s/AKfycbyX3fWQJMzlxwc1q-v0hV3O56UOeIMZ3PRJhBxlhJ2qw6_I6mQaHkvBtMggadbHr271PA/exec';
 
-  <div id="login" class="login" hidden></div>
-  <div id="agenda" class="agenda" hidden></div>
+  const respaldo = 'data:image/png;base64,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';
+  const img = document.getElementById('logo');
+  img.onerror = () => { if (img.src !== respaldo) img.src = respaldo; };
+  img.src = 'https://ipuc.org.co/assets/logo-ipuc-CokGg3u3.webp';
 
-  <div id="app" hidden>
-    <header class="appbar">
-      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menú"></button>
-      <div class="brand">
-        <div class="brand-logo" id="brandLogo"></div>
-        <div class="brand-text">
-          <small>Iglesia Pentecostal Unida de Colombia</small>
-          <strong id="brandCongregacion">Congregación</strong>
-        </div>
-      </div>
-      <div class="appbar-right">
-        <span class="appbar-date" id="appbarFecha"></span>
-        <button class="user-chip" id="userChip" type="button" aria-haspopup="true">
-          <div class="avatar" id="userAvatar">?</div>
-          <div class="user-meta">
-            <strong id="userName"></strong>
-            <span id="userRole" class="role-pill"></span>
-          </div>
-        </button>
-        <div class="user-menu" id="userMenu" hidden>
-          <button type="button" data-act="cambiarClave">Cambiar contraseña</button>
-          <button type="button" data-act="salir">Cerrar sesión</button>
-        </div>
-      </div>
-    </header>
-    <div class="layout">
-      <aside id="sidebar" class="sidebar">
-        <nav id="nav" class="nav"></nav>
-        <div class="sidebar-foot">
-          <em>“Un Señor, una fe, un bautismo”</em>
-          <span id="appVersion"></span>
-        </div>
-      </aside>
-      <div class="scrim" id="scrim"></div>
-
-      <main class="main">
-        <header class="topbar">
-          <div class="topbar-title">
-            <h1 id="pageTitle">Panel</h1>
-            <span id="pageSubtitle" class="muted"></span>
-          </div>
-          <div class="topbar-actions" id="topbarActions"></div>
-        </header>
-        <section id="view" class="view"></section>
-        <footer class="pie" id="pie"></footer>
-      </main>
-    </div>
-  </div>
-
-  <div id="modal" class="modal" hidden>
-    <div class="modal-card" role="dialog" aria-modal="true">
-      <header class="modal-head">
-        <h2 id="modalTitle"></h2>
-        <button class="icon-btn" data-close aria-label="Cerrar">✕</button>
-      </header>
-      <div id="modalBody" class="modal-body"></div>
-    </div>
-  </div>
-  <div id="toasts" class="toasts"></div>
-
-  <script>window.MODO = '<?= modo ?>';</script>
-  <?!= include('Scripts'); ?>
+  const zona = document.getElementById('zona');
+  if (!/^https:\/\/script\.google\.com\/.+\/exec$/.test(URL_APP)) {
+    zona.innerHTML = '<div class="aviso"><b>Falta configurar la dirección del sistema.</b><br>Edite este archivo en GitHub y pegue en URL_APP la dirección de la aplicación web de Apps Script (termina en <code>/exec</code>).</div>';
+  } else {
+    zona.innerHTML = '<a class="btn b1" href="' + URL_APP + '" target="_top">Entrar al sistema</a>' +
+      '<a class="btn b2" href="' + URL_APP + '?p=agenda" target="_top">Agenda de comités</a>';
+  }
+</script>
 </body>
 </html>

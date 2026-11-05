@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Myriad Pro (tipografía institucional) no está disponible en la web; Source Sans 3 es su equivalente libre de Adobe. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <?!= include('Styles'); ?>
+</head>
+<body>
+  <div id="splash" class="splash">
+    <div class="splash-ring"></div>
+    <p>Cargando sistema…</p>
+  </div>
+
+  <div id="login" class="login" hidden></div>
+  <div id="agenda" class="agenda" hidden></div>
+
+  <div id="app" hidden>
+    <header class="appbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Menú"></button>
+      <div class="brand">
+        <div class="brand-logo" id="brandLogo"></div>
+        <div class="brand-text">
+          <small>Iglesia Pentecostal Unida de Colombia</small>
+          <strong id="brandCongregacion">Congregación</strong>
+        </div>
+      </div>
+      <div class="appbar-right">
+        <span class="appbar-date" id="appbarFecha"></span>
+        <button class="user-chip" id="userChip" type="button" aria-haspopup="true">
+          <div class="avatar" id="userAvatar">?</div>
+          <div class="user-meta">
+            <strong id="userName"></strong>
+            <span id="userRole" class="role-pill"></span>
+          </div>
+        </button>
+        <div class="user-menu" id="userMenu" hidden>
+          <button type="button" data-act="cambiarClave">Cambiar contraseña</button>
+          <button type="button" data-act="salir">Cerrar sesión</button>
+        </div>
+      </div>
+    </header>
+    <div class="layout">
+      <aside id="sidebar" class="sidebar">
+        <nav id="nav" class="nav"></nav>
+        <div class="sidebar-foot">
+          <em>“Un Señor, una fe, un bautismo”</em>
+          <span id="appVersion"></span>
+        </div>
+      </aside>
+      <div class="scrim" id="scrim"></div>
+
+      <main class="main">
+        <header class="topbar">
+          <div class="topbar-title">
+            <h1 id="pageTitle">Panel</h1>
+            <span id="pageSubtitle" class="muted"></span>
+          </div>
+          <div class="topbar-actions" id="topbarActions"></div>
+        </header>
+        <section id="view" class="view"></section>
+        <footer class="pie" id="pie"></footer>
+      </main>
+    </div>
+  </div>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <h2 id="modalTitle"></h2>
+        <button class="icon-btn" data-close aria-label="Cerrar">✕</button>
+      </header>
+      <div id="modalBody" class="modal-body"></div>
+    </div>
+  </div>
+  <div id="toasts" class="toasts"></div>
+
+  <script>window.MODO = '<?= modo ?>';</script>
+  <?!= include('Scripts'); ?>
+</body>
+</html>
